@@ -130,6 +130,12 @@ function TourSteps() {
   const enter = useEffectEvent((index: number) => STEPS[index].enter?.({ update, view }))
   useEffect(() => enter(step), [step])
 
+  // [Agent] The steps borrow the moment to act out what they say (the First World War in a 4-year span, Detail raised). Closing the tour, however it closes, hands back the moment the visitor had, so the default span and any shared link survive it.
+  useEffect(() => {
+    const before = useHistory.getState()
+    return () => update({ time: before.time, selected: before.selected, view: { detail: before.view.detail } })
+  }, [update])
+
   useLayoutEffect(() => {
     const measure = () => setRect(targetRect(STEPS[step].target))
     measure()
