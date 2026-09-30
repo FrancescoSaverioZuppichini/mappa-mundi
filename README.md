@@ -482,12 +482,6 @@ The map's attribution control (bottom right) credits Natural Earth, historical-b
 
 ## Deploy
 
-It's a static site: `npm run build` writes `dist/`, and everything it needs is committed in `public/`, so the host never runs the data pipeline. On Cloudflare, connect the repo under Workers & Pages → Pages and set:
+It's a static site: `npm run build` writes `dist/`, and everything it needs is committed in `public/`, so the host never runs the data pipeline. On Cloudflare it's an assets-only Worker (`wrangler.jsonc`): connect the repo under Workers & Pages → Create → Import a repository, and keep the defaults, build command `npm run build` and deploy command `npx wrangler deploy`.
 
-| Setting | Value |
-|---|---|
-| Framework preset | Vite (or None) |
-| Build command | `npm run build` |
-| Build output directory | `dist` |
-
-Node comes from `.node-version` (24), and `public/_headers` sets the caching: fingerprinted `/assets` forever, fonts for a year, data and geography for a day. State lives in the URL hash, so there are no routes to rewrite. Every push to `main` deploys, and other branches get preview URLs.
+Node comes from `.node-version` (24), and `public/_headers` sets the caching: fingerprinted `/assets` forever, fonts for a year, data and geography for a day. State lives in the URL hash, so there are no routes to rewrite. Every push to `main` deploys.

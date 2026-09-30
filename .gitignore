@@ -25,3 +25,6 @@ dist-ssr
 
 # pipeline cache and source-of-truth DB (root only: public/data is what ships)
 /data/
+
+# wrangler local state
+.wrangler/
