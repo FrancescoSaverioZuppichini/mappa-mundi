@@ -1,0 +1,140 @@
+@import 'tailwindcss';
+
+/* [Agent] Tailwind tokens point at CSS variables that App.tsx rewrites on every epoch change, so `bg-paper`, `text-on-space` and the rest restyle live. Display type follows the epoch; UI and body text stay in Inter and Source Serif so small text is always legible. */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-accent: var(--accent);
+  --color-space: var(--space);
+  --color-on-space: var(--on-space);
+  --color-highlight: var(--highlight);
+  --font-display: var(--display-font);
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-serif: 'Source Serif 4', Georgia, serif;
+  /* [Agent] One motion language: everything eases out on the same expo curve. Panels glide in, menus and tooltips pop in, buttons press. */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-panel-in: panel-in 0.5s var(--ease-out-expo);
+  --animate-pop-in: pop-in 0.18s var(--ease-out-expo);
+  /* [Agent] Duration comes from the element (DWELL_MS), so the dwell length lives in one place. */
+  --animate-dwell: dwell linear forwards;
+}
+
+/* [Agent] Chrome that floats over the dark space around the globe: smoked glass with a half-pixel edge, so the globe stays the only lit object on the page. Content cards (event panel, tooltip) use paper instead. */
+@utility glass {
+  background-color: color-mix(in srgb, var(--space) 55%, transparent);
+  color: var(--on-space);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--on-space) 22%, transparent);
+  backdrop-filter: blur(18px) saturate(1.3);
+}
+
+/* [Agent] Tactile buttons: a quick colour ease, and a slight squeeze while held. */
+@utility press {
+  transition:
+    transform 0.15s var(--ease-out-expo),
+    background-color 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+  &:active {
+    transform: scale(0.94);
+  }
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes dwell {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+:root {
+  --paper: #f6efdc;
+  --ink: #2d2a26;
+  --accent: #8b3a2b;
+  --space: #1a2126;
+  --on-space: #f6efdc;
+  --highlight: #e3836a;
+  --display-font: 'IM Fell English', serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--space);
+  overflow: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* [Agent] The Detail slider: a hairline track and a small glowing thumb instead of the browser's chunky default. */
+input[type='range'].hairline {
+  appearance: none;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range'].hairline::-webkit-slider-runnable-track {
+  height: 1px;
+  background: color-mix(in srgb, var(--on-space) 30%, transparent);
+}
+input[type='range'].hairline::-moz-range-track {
+  height: 1px;
+  background: color-mix(in srgb, var(--on-space) 30%, transparent);
+}
+input[type='range'].hairline::-webkit-slider-thumb {
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--highlight);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--highlight) 22%, transparent);
+  transition: transform 0.15s var(--ease-out-expo), box-shadow 0.15s;
+}
+input[type='range'].hairline:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--highlight) 18%, transparent);
+}
+input[type='range'].hairline::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--highlight);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--highlight) 22%, transparent);
+}
+
+/* [Agent] MapLibre pins its attribution to the bottom-right corner, which the timeline covers. It is lifted above the bar and reduced to quiet text, the way credits sit at the foot of a map plate. */
+.maplibregl-ctrl-bottom-right {
+  bottom: 8.25rem;
+  right: 1.25rem;
+}
+.maplibregl-ctrl.maplibregl-ctrl-attrib {
+  background: transparent;
+  color: color-mix(in srgb, var(--on-space) 40%, transparent);
+  font: 10px 'Inter', sans-serif;
+}
+.maplibregl-ctrl-attrib a {
+  color: inherit;
+}
+.maplibregl-ctrl-attrib-button {
+  filter: invert(1);
+  opacity: 0.4;
+}
