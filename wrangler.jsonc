@@ -2,5 +2,7 @@
 {
   "name": "mappa-mundi",
   "compatibility_date": "2026-09-30",
-  "assets": { "directory": "./dist" }
+  "assets": { "directory": "./dist" },
+  // [Agent] Said explicitly because the dashboard created the project with the workers.dev URL off, and the config is what every deploy enforces.
+  "workers_dev": true
 }
