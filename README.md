@@ -1,4 +1,6 @@
-# WikiHistory
+# Mappa Mundi
+
+*A mappa mundi was the medieval map of the whole known world. This one also moves through time.*
 
 **Five thousand years on one globe.** About 54,000 events from Wikipedia, from 3000 BC to today, ranked by how much the rest of Wikipedia points at them. Drag through time and the world redraws itself as the maps of each age. Zoom in and history gets denser. Press play and watch it happen.
 
@@ -6,7 +8,7 @@
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # type-check + production build
-npm run lint
+npm run lint     # Biome: lint + format check (npm run format fixes)
 ```
 
 Want to understand it by building it? **[TUTORIAL.md](TUTORIAL.md)** rebuilds a mini version from an empty folder, step by step: the data pipeline, ranking, level of detail, the globe and the timeline.
@@ -19,9 +21,10 @@ Want to understand it by building it? **[TUTORIAL.md](TUTORIAL.md)** rebuilds a 
   - [What matters in a moment](#what-matters-in-a-moment)
   - [What the map shows: level of detail](#what-the-map-shows-level-of-detail)
   - [Eras](#eras)
-  - [Navigation](#navigation)
+  - [State: one store, one writer](#state-one-store-one-writer)
 - [Architecture](#architecture)
-- [Sources](#sources)
+- [Data sources](#data-sources)
+- [Deploy](#deploy)
 
 ---
 
@@ -35,7 +38,7 @@ Want to understand it by building it? **[TUTORIAL.md](TUTORIAL.md)** rebuilds a 
   - The modern era is the satellite Earth with glowing borders.
   - Borders come from 48 historical snapshots and follow the year you're looking at. Scrubbing across 1500 re-inks the whole world.
 - **Time is a place you scrub through.**
-  - You look through a lens with a span in years: 1, 10, 25, 50, 100 (the default) or 500.
+  - You look through a lens with a span in years: 1, 10, 25, 50 (the default), 100 or 500.
   - Press or drag anywhere on the bar and the lens goes there, like a video playhead. There are no handles to aim at.
   - The bar is logarithmic, so the dense recent past and the sparse deep past both get room. Era tabs jump straight to an age.
 - **The chronicle names every stretch of time.**
@@ -49,7 +52,7 @@ Want to understand it by building it? **[TUTORIAL.md](TUTORIAL.md)** rebuilds a 
   - The Detail slider sets how busy the screen may get.
 - **Nothing flickers.** Placement is sticky, so bubbles and labels stay put while you pan and spin the globe.
 - **Three ways to wander.**
-  - **Surprise me** is a time machine. The years glide across the bar while the globe flies to an event you haven't seen, landing with a ripple.
+  - **Surprise me** is a time machine: it jumps to an event you haven't seen, and the globe flies there and lands with a ripple.
   - **Follow the thread** chains "what happened next" from one event to the most plausible continuation, hop after hop.
   - **Play** runs history forward at the speed you choose (1 to 100 years a second). With **Auto-explore** on, each moment's most important event opens as it arrives and the camera follows it. Switch it off and only time moves.
 - **Hairline craft.**
@@ -106,14 +109,15 @@ The rule that keeps the pipeline simple: **the fetch scripts only record facts, 
 | Wikipedia facts | `npm run data:wikipedia` | in-degree + article coordinates per article (cached per article) | ~15 min |
 | Decisions | `npm run data:export` | filter, position, score, sort, write binary | seconds |
 | Geography | `npm run data:geo` | borders, land, rivers, decorations → `public/geo` | ~20 s |
+| Fonts | `npm run data:fonts` | every UI and map-label font → `public/fonts`, so nothing loads from a font CDN | seconds |
 
-`npm run data` runs all four in order.
+`npm run data` runs all five in order.
 
 #### Which events
 
 `scripts/fetch-events.ts` takes its events from **Wikidata**, queried through **QLever** (`qlever.dev`) rather than the Wikidata Query Service. WDQS times out and truncates the big classes, while QLever returns them complete in seconds.
 
-**Allowlist, not catch-all.** The generic "occurrence" class looks tempting, but half of it is sports seasons, tennis draws, award shows and beauty pageants. Instead, `src/model/categories.ts` lists the class trees that are actual history. Each class includes its subclasses (`wdt:P31/wdt:P279*`).
+**Allowlist, not catch-all.** The generic "occurrence" class looks tempting, but half of it is sports seasons, tennis draws, award shows and beauty pageants. Instead, `src/lib/categories.ts` lists the class trees that are actual history. Each class includes its subclasses (`wdt:P31/wdt:P279*`).
 
 | Category | Wikidata classes |
 |---|---|
@@ -197,7 +201,7 @@ The panel shows the **raw** in-degree ("574 articles link here"). Only ranking u
 
 Rows are sorted by score, most important first. The app relies on that order everywhere: walking from the top ranks events almost without sorting (see [What matters in a moment](#what-matters-in-a-moment)).
 
-`events.bin` is binary. Every `f32` column starts 4-byte aligned, so `src/model/events.ts` wraps each one as a typed-array view with no copy.
+`events.bin` is binary. Every `f32` column starts 4-byte aligned, so `src/hooks/useHistory.ts` wraps each one as a typed-array view with no copy.
 
 ```
 u32 count
@@ -224,7 +228,7 @@ u8  category   × count
 
 ### Time
 
-`src/model/time.ts` maps a year to a position `t` from 0 to 1 on the timeline. `t` is a log of "years before 2026", offset so the present doesn't stretch to infinity:
+`src/lib/time.ts` maps a year to a position `t` from 0 to 1 on the timeline. `t` is a log of "years before 2026", offset so the present doesn't stretch to infinity:
 
 ```
 t(year) = (ln(5176) − ln(2026 − year + 150)) / (ln(5176) − ln(150))
@@ -232,14 +236,14 @@ t(year) = (ln(5176) − ln(2026 − year + 150)) / (ln(5176) − ln(150))
 
 With the offset K = 150, antiquity and the last two centuries each get about a quarter of the bar, which is roughly how the events are distributed.
 
-- **The moment.** Where you are is a `Moment`: the **playhead year**, a **span** in years, and the **window** of events they cover. Every move builds one with `momentAt(year, span)`, so the three never disagree. Scrubbing, era tabs, search, trips and Play all move the playhead and keep the span.
+- **The moment.** Where you are is the **playhead year** and a **span** in years (`state.time`). The **window** of shown events is derived from them with `windowOf`, never stored. Scrubbing, era tabs, search, Surprise and Play all move the playhead and keep the span.
 - **The playhead picks the era's look and the border snapshot.** At either end of history the window is clipped rather than slid back inside, so the playhead stays exactly where it was put. Pick a 500-year span in 1942 and the window is 1692–2026, but the map still shows 1942's world. The alternative gets it wrong: sliding the window to 1526–2026 and taking its middle would put WWII bubbles on 1815 borders.
 - **On the bar**, a 100-year lens is wide in the 20th century and a sliver in antiquity, so the playhead knob is what marks where you are. It sits off the lens's visual middle, because the bar is logarithmic and the lens can be clipped.
-- **The chronicle** (`src/timeline/timeline.ts`) is the lens magnified to a linear run of years. The window's events are taken in rank order, and each claims the first of two rows where its label and its stem fit, greedily, like the map's placement. The open event goes first. A pan shifts every label by the same amount, so the same ones survive it. An event that began before the window hangs from the left edge.
+- **The chronicle** (`src/components/timeline/canvas.ts`) is the lens magnified to a linear run of years. The window's events are taken in rank order, and each claims the first of two rows where its label and its stem fit, greedily, like the map's placement. The open event goes first. A pan shifts every label by the same amount, so the same ones survive it. An event that began before the window hangs from the left edge.
 
 ### What matters in a moment
 
-`src/model/rank.ts` ranks the events of a time window. Ranking by full score would let a long event headline every window it touches: the Roman–Persian Wars (54 BC–628 AD) would lead every decade for seven centuries. Instead, an event's score is spread over the years it lasted, and a window gets the share it covers:
+`src/lib/rank.ts` ranks the events of a time window. Ranking by full score would let a long event headline every window it touches: the Roman–Persian Wars (54 BC–628 AD) would lead every decade for seven centuries. Instead, an event's score is spread over the years it lasted, and a window gets the share it covers:
 
 ```
 share      = (overlap(event, window) + 1) / (duration(event) + 1)       years, counted inclusively
@@ -252,17 +256,14 @@ importance = score × share
 
 Every ranking uses this share: the map's bubbles and their sizes, the chronicle, the timeline's hover preview, Play's headline, and the panel's "top X% of this span".
 
-Computing it stays cheap because the rows are pre-sorted by full score and a share is at most 1:
-
-- **`rankWindow`.** Events wholly inside the window keep their full score, so they're already in order. Only the ones sticking out past an edge get sorted, and then the two runs are merged. The atlas caches the result per window, so a pan or zoom doesn't recompute it.
-- **`headlineOf`** is the top event alone. It walks from the top row and stops once a row's full score can't beat the best share found so far.
+`rank(events, window, hidden)` in `src/lib/rank.ts` filters the window's events and sorts them by score × share: about 0.35 ms for 15,000 events. The map, the timeline, the panel and Play all ask for the same window in the same frame, so `rank` keeps its last answer and hands it back when the question repeats. The headline of a moment is simply `rank(…)[0]`.
 
 ### What the map shows: level of detail
 
-Each placement pass decides which events get a bubble, and which bubbles get a label. It's `placeEvents` in `src/map/placement.ts`, a pure function. It sees the screen only through a `Viewport` (size, zoom, and "where does this lon/lat land, if visible"), so it knows nothing about MapLibre.
+Each placement pass decides which events get a bubble, and which bubbles get a label. It's `placeEvents` in `src/components/globe/placement.ts`, a pure function. It sees the screen only through a `Viewport` (size, zoom, and "where does this lon/lat land, if visible"), so it knows nothing about MapLibre.
 
 1. **Target.** The Detail slider `d ∈ [0, 1]` sets how many events the screen should hold: `target = 25 × 24^d`, from 25 to 600.
-2. **Pool.** The window's events arrive ranked by `rankWindow`, and only the top part of them compete: `pool = max(⌈population × min(1, 0.3 × 2^(zoom − 1.8))⌉, 3 × target)`.
+2. **Pool.** The window's events arrive ranked by `rank`, and only the top part of them compete: `pool = max(⌈population × min(1, 0.3 × 2^(zoom − 1.8))⌉, 3 × target)`.
    - At the default zoom that's the top 30%, and each zoom level doubles it. Zooming in lowers the bar, so the long tail appears only when the view gets specific.
    - The `3 × target` floor means sparse eras (antiquity) show what they have instead of being starved.
 3. **Visibility.** On the globe, an event is on the visible face when it's within about 72° of the centre (the unit-vector dot product is above 0.3). Otherwise `project()` would return positions for the far side too. On the flat map, longitudes are moved to the copy of the world nearest the centre first.
@@ -282,7 +283,7 @@ The header's "≥ N links" is the smallest raw in-degree among the events curren
 
 ### Eras
 
-The eras are defined in `src/model/epochs.ts` and drawn by `src/map/style.ts`. There are five, each a different kind of map rather than a recolour:
+The eras are defined in `src/lib/epochs.ts` and drawn by `src/components/globe/style.ts`. There are five, each a different kind of map rather than a recolour:
 
 | Era | From | Look |
 |---|---|---|
@@ -299,44 +300,60 @@ How switching works:
 - Map labels are rendered by MapLibre from each era's own font files.
 - Borders show the latest snapshot at or before the playhead year, debounced by 120 ms while scrubbing.
 
-### Navigation
+### State: one store, one writer
 
-Every way the view moves between events goes through one module, `src/state/navigation.ts`. It owns the selection, the time-window animations and the camera. The camera is an explicit command in the store, `camera: { index, mode }`, which `src/map/atlas.ts` executes. The map never infers camera moves from other state.
+The whole app runs on one zustand store in `src/hooks/useHistory.ts`: the state, plus `update`, the only way to change it. Components read a slice and take `update` from the same hook. There's no main loop: nothing runs while you're idle.
 
-**Every user action interrupts** the two autoplays (the story thread and Play) and cancels any trip in flight, so nothing else needs to know they exist.
+```ts
+state = {
+  time:     { year, span },                 // where you are; the window of shown events is derived (windowOf)
+  selected: number | null,                  // the open event
+  view:     { detail, hidden, projection }, // what you see
+  play:     { on, speed, explore },         // time moving by itself
+  thread:   boolean,                        // hopping along "what happened next"
+  tour:     boolean,
+  drawn:    { … },                          // what the globe drew, for the header's counts
+}
 
-**The open event always lies inside the time window**, except during a trip. `keepSelectionInTime` watches the window, and moving time off the open event closes it, whether by scrubbing, a span button, an era tab or Play running past it. So a 2011 war never lingers over antiquity.
+const time = useHistory(s => s.time)       // a component re-renders only when its slice changes
+const update = useHistory(s => s.update)
+update({ time: { span: 25 } })             // a patch names only what changes; a group is replaced only if touched,
+update({ selected: i })                    // so a component reading `time` doesn't re-render when `view` changes
+```
 
-#### The moves
+**Every rule lives in one pure function, `apply(prev, patch)` in `src/lib/history.ts`,** and the store's `update` is just `set(prev => apply(events, prev, patch))`:
 
-| Move | Triggered by | What happens |
+- Opening an event takes you to its time.
+- Moving time off the open event closes it, so a 2011 war never lingers over antiquity.
+- Picking an event stops Play and the thread, unless the patch keeps them on (their own loops do).
+- Play starts from the moment itself, not from whatever was open.
+
+**What reads it:**
+
+| Who | Reads | Writes |
 |---|---|---|
-| `select(i)` | clicking a bubble, closing the panel | Opens or closes in place. No camera move. |
-| `focus(i)` | search, related lists, shared links, chronicle labels | The window keeps its span and re-centres on the event (unless it's already inside). Camera `reveal`: fly there only if it isn't visible beside the panel. |
-| `travelTo(i)` | "What happened next" | The time machine trip, described below. |
-| `surprise()` | "Surprise me", the **R** key | `travelTo` a random event from the top 6,000 not yet seen this session: famous enough to have a story, not always the same ten headliners. |
-| `follow()` | "Follow the thread" | Autoplays "what happened next": travel, dwell 10 s, travel again, never revisiting an event. Stops when the story runs out or you take over. "Next now" skips the dwell. |
-| `play()` | the timeline's ▶ | Time runs forward at the chosen speed. With auto-explore on, each moment's headline opens as the camera glides to it. See below. |
+| Header | `time`, `view`, `drawn` | `update({ time: { span } })`, `update({ view: { detail } })` |
+| Timeline | `time`, `rank(…)` for the chronicle | `update({ time: { year } })`, `update({ selected })` |
+| Globe (`components/globe/map.ts`) | `time`, `view`, `selected`, `rank(…)` | `update({ selected })` on click, `update({ drawn })` after drawing |
+| Panel, Search, Surprise, Categories, Tour | their slices | `update({ selected })`, `update({ thread })`, `update({ view: { hidden } })` … |
 
-**The trip** (`travelTo`, used by surprise and follow):
+**The camera isn't state.** The globe follows `selected`:
 
-- **Time.** Over 2.4 s on an in-out cubic curve, the window glides to the event, keeping its span. The glide runs in bar position rather than years, so a trip from 1900 to 500 BC spends its time evenly across the ages. The map re-inks itself through every era it passes.
-- **Space.** At the same time, camera `travel` flies a high arc (`curve 1.7`, 2.2 s) down to regional zoom **4.4**, already padded for the panel.
-- **Pinned.** During the flight the destination is `flight` in the store, which placement pins so the event is drawn the moment the camera lands.
-- **Arrival.** A ripple in a variant of the event's colour grows out and fades (1.4 s), then the event becomes the selection and the panel opens.
+- a newly opened event already in view beside the panel only eases the padding;
+- otherwise the camera flies a high arc (`curve 1.7`, 2.2 s) down to regional zoom 4, and a ripple in a variant of the event's colour marks the landing;
+- during Play it glides instead (2.4 s, never zooming out).
 
-**Play:**
+**What runs by itself** is three reactions in `hooks/useHistory.ts`, each writing back through `update()`. They, the map and the timeline canvas are the only code that uses `useHistory.getState()` and `subscribe()`, because they aren't React components:
 
-- **Speed.** The window slides forward in real years: `playSpeed` years per second, stepped with − / + through **1, 2, 5, 10, 25, 50, 100** (default 10). "1 yr/s" means exactly that.
-- **Live settings.** Speed, span and auto-explore can all change mid-play, and dragging the timeline just moves where playback continues from, because every frame starts from the current store state.
-- **Headline.** The headline of a moment is the most important event of the current window by share (`headlineOf`, see [What matters in a moment](#what-matters-in-a-moment)).
-- **Auto-explore** (the compass beside ▶, on by default). When the headline changes, it opens in the panel and camera `glide` eases the map to it (2.4 s, zoom ≥ 2.5, never zooming out if you're already closer). A new headline opens **at most every 3.5 s**, so each one stays up long enough to read and the camera drifts instead of twitching. With auto-explore off, Play only moves time.
-- **Starting** clears the open event, so Play begins from the moment itself rather than from whatever was being read.
-- **Stopping.** Playback stops at 2026, or when any user action takes over. Play writes its own selections straight to the store rather than through `select()`, which would interrupt it.
+- **Play.** Each frame moves the playhead `speed` years per second (1, 2, 5, 10, 25, 50, 100; default 10), measured in real time. With explore on, when the window's top event changes, it opens, at most every 3.5 s so each one stays up long enough to read. It stops at 2026 or when you pick an event.
+- **The thread.** It lingers 10 s on the open event, then opens `nextInStory`, never revisiting an event. It ends when the story runs out or you pick something.
+- **The URL.** `#year,spany[,Qid]` is written at most every 250 ms, and read once at startup. Older `#start,end` links still open.
+
+Surprise me (the **R** key) opens a random event from the 6,000 most linked, and doesn't repeat one until it has shown them all.
 
 #### What happened next
 
-`nextInStory(from)` in `src/model/story.ts` picks the event that best continues the story:
+`nextInStory(from)` in `src/lib/story.ts` picks the event that best continues the story:
 
 ```
 horizon = max(4, (2026 − start(from)) × 0.04)            years
@@ -353,7 +370,7 @@ A real thread from the current data: **Battle of Cape Esperance** (1942, Solomon
 
 #### The event panel's other lists
 
-`src/ui/EventPanel.tsx` builds each list by walking the score-sorted events once and keeping the first 5 matches, so they're already the most important ones.
+`src/components/EventPanel.tsx` builds each list by walking the score-sorted events once and keeping the first 5 matches, so they're already the most important ones.
 
 - **Meanwhile, elsewhere:** events overlapping the same years, more than 800 km away. "The same years" widens with age by `max(2, (2026 − start) × 0.01)` years: ±2 for the 1940s, ±10 around 1066, ±25 in antiquity.
 - **Same place, other eras:** events within 150 km, from any time, listed chronologically.
@@ -371,54 +388,106 @@ scripts/  Node, offline         ──►  public/data/events.bin + events-meta.
           → data/history.sqlite
 ```
 
-### App layers
+### Every file and what it's responsible for
+
+Each file opens with the same line (`// [Agent] Responsibility: …`), and this tree is those lines, shortened.
 
 ```
+scripts/                       the offline pipeline (Node 24, no dependencies)
+├─ fetch-events.ts             Wikidata facts → data/history.sqlite: dates, sitelinks, position candidates. Decides nothing.
+├─ fetch-wikipedia.ts          Wikipedia facts → data/history.sqlite: each article's in-degree and coordinates, cached per article
+├─ export-events.ts            every decision: facts → public/data/events.bin + events-meta.json (what ships, where, how important)
+├─ fetch-geo.ts                geography → public/geo: land, sea, lakes, rivers, border snapshots, decoration
+└─ fetch-fonts.ts              every font, once → public/fonts (UI woff2 + ui.css, map-label TTFs), so no font CDN at runtime
+
 src/
-├─ main.tsx         boot: load data and fonts → restore URL → render
-├─ model/           what the app is about. Pure data and rules; no DOM, state, React or MapLibre
-│   ├─ categories.ts   event categories: Wikidata classes, colour, rank weight (shared with scripts/)
-│   ├─ rank.ts         what matters in a moment: events ranked by their share of a window, and its headline
-│   ├─ story.ts        which event comes next in a story
-│   ├─ epochs.ts       the five eras and each one's map look
-│   ├─ events.ts       the EventsData columns + loading them
-│   └─ time.ts         the log time scale (year ⇄ position on the bar), the moment (playhead, span, window), year formatting
-├─ state/           the single store and what changes it
-│   ├─ store.ts        app state: the moment, selection, filters, camera command, autoplay flags, play speed
-│   ├─ navigation.ts   every way the view moves: select, focus, travel, surprise, follow the thread, play
-│   └─ permalink.ts    URL hash ⇄ state
-├─ map/             the MapLibre adapter (imperative)
-│   ├─ atlas.ts        composition root: creates the map, wires the pieces below to the store
-│   ├─ placement.ts    level of detail, PURE: which events get a bubble and a label (sees a Viewport, not MapLibre)
-│   ├─ viewport.ts     the map's view as a Viewport: what's visible, and where it lands on screen
-│   ├─ style.ts        the MapLibre style, plus switching epochs by fading paint in place
-│   ├─ borders.ts      historical border snapshots for the playhead year
-│   ├─ hover.ts        hover state and its eased ring animation
-│   ├─ pulse.ts        the one-shot arrival ripple
-│   └─ textures.ts     procedural paper, vellum and engraving textures
-├─ timeline/
-│   └─ timeline.ts     the canvas timeline: era tabs, the overview with its lens, the chronicle; scrub, pan, wheel, keyboard
-└─ ui/              React components: chrome, panels, tour
-    ├─ App.tsx         page layout + epoch theme (CSS variables)
-    ├─ Atlas.tsx, Timeline.tsx   mount the imperative map and timeline (Timeline also holds Play and its speed)
-    └─ Header, Search, CategoryMenu, EventPanel, Tooltip, Tour, Surprise, icons
+├─ main.tsx                    boot: fonts + the app together, or an error on the page if the data fails
+├─ index.css                   Tailwind, the theme tokens the epochs rewrite, custom utilities and keyframes
+├─ types.ts                    the shared shapes: EventsData, HistoryState, HistoryPatch, HistoryStore, EpochConfig, …
+├─ consts.ts                   the numbers that define behaviour, and the default state
+├─ hooks/
+│   └─ useHistory.ts           the store: loads the data, the one state + update(), and Play, the thread and the URL
+├─ lib/                        pure functions over plain data: no React, no DOM, no MapLibre
+│   ├─ history.ts              every rule of the state: apply(prev, patch) → next
+│   ├─ rank.ts                 what matters in a moment: rank(events, window, hidden), by score × share
+│   ├─ story.ts                "what happened next", and distances between events
+│   ├─ time.ts                 the log scale of the bar, windowOf, year formatting
+│   ├─ categories.ts           categories: Wikidata classes, colour, rank weight (shared with scripts/)
+│   └─ epochs.ts               the five eras: start year, UI palette and fonts, map look; epochAt(year)
+└─ components/                 React, plus the two imperative engines
+    ├─ App.tsx                 the page: layer order, and the epoch's colours as CSS variables
+    ├─ Header.tsx              era and years, span buttons, Detail and counts, the toolbar
+    ├─ Search.tsx              find an event by name and open it (/ or ⌘K)
+    ├─ CategoryMenu.tsx        switch categories on and off, with counts for the window
+    ├─ EventPanel.tsx          the open event: summary, rank in the span, related events, what happened next, the thread
+    ├─ Surprise.tsx            open a random notable event not seen yet (button or R)
+    ├─ Tour.tsx                the first-visit tour: steps that spotlight the real UI and act out what they say
+    ├─ icons.tsx               the line icons
+    ├─ globe/
+    │   ├─ Globe.tsx           mounts map.ts; owns the hover state that feeds the Tooltip
+    │   ├─ map.ts              THE GLOBE ENGINE: owns the MapLibre map, draws the state, re-places on camera moves, follows `selected`
+    │   ├─ placement.ts        level of detail, pure: which events get a bubble and a label, and how big
+    │   ├─ viewport.ts         the map's view as a Viewport: size, zoom, lon/lat → screen (null when hidden)
+    │   ├─ style.ts            the MapLibre style for every era; switching eras by fading paint
+    │   ├─ borders.ts          the border snapshot at or before the playhead
+    │   ├─ hover.ts            the bubble under the pointer, and its eased ring
+    │   ├─ pulse.ts            the ripple when the camera lands
+    │   ├─ textures.ts         procedural era textures (papyrus, vellum, grain, waves, engraving)
+    │   └─ Tooltip.tsx         the card that follows the pointer over a bubble
+    └─ timeline/
+        ├─ Timeline.tsx        the bottom bar: Play, explore, speed, and the canvas
+        └─ canvas.ts           THE TIMELINE ENGINE: owns the <canvas>, draws tabs, overview, lens and chronicle; input → update()
 ```
 
-**Dependency rule: imports only point down.** `ui → map, timeline → state → model`. `model` imports nothing from the app, and `ui` reaches `map` and `timeline` only through the two components that mount them. Within `map`, only `atlas.ts` talks to the store; the other modules take plain inputs and return plain outputs.
+**`map.ts` vs `canvas.ts`.** They're the app's two engines: imperative code that owns one element each, reads the store and writes through `update()`, and never renders React. `map.ts` owns the MapLibre globe: bubbles, labels, borders, the era's look and the camera. `canvas.ts` owns the timeline bar: the histogram, the lens, the playhead and the chronicle, and it turns pointer, wheel and keys into time and selection changes. They share nothing but the store.
 
-**Data flow.**
+**Dependency rule.** Components read and write through `hooks/useHistory.ts`, which uses `lib/`. `lib/` imports nothing from the app. Inside `components/globe/`, only `map.ts` touches the state; the other modules take plain inputs and return plain outputs.
 
-- **One zustand store.** The map and the timeline subscribe to it directly, outside React, so dragging through time or panning never costs a React render. Components read it with `useStore(store, selector)` and re-render only when their slice changes.
-- **Plain arrays for the events.** They're loaded once as typed-array columns (`EventsData`), sorted by importance, and every module reads them by row index. There are no per-event objects.
-- **One owner for navigation.** `state/navigation.ts` owns the selection, the time-window animations and the camera command (see [Navigation](#navigation)).
+**Data flow.** One state, one writer, and everything reacts (see [State: one store, one writer](#state-one-store-one-writer)). The events are loaded once as typed-array columns, sorted by importance, and every module reads them by row index. There are no per-event objects.
 
 **Conventions.**
 
-- Imperative modules are functions: `createAtlas`, `createTimeline`, `createBorders` and `createHover` each take their inputs and return a cleanup, or an object with `destroy`. There are no classes and no framework glue.
-- Pure logic is plain functions over plain data: `rankWindow`, `placeEvents`, `nextInStory`, `momentAt`, `formatYears`.
+- Imperative modules are functions: `createMap`, `createTimeline`, `createBorders` and `createHover` each take their inputs and return a cleanup, or an object with `destroy`. There are no classes and no framework glue.
+- Pure logic is plain functions over plain data: `rank`, `placeEvents`, `nextInStory`, `windowOf`, `formatYears`.
 - No `utils` module. A helper lives next to its only caller unless two layers genuinely share it.
 - Comments marked `[Agent]` explain *why*, not what.
 
-## Sources
+## Data sources
 
-Wikidata (CC0), Wikipedia (CC BY-SA), [historical-basemaps](https://github.com/aourednik/historical-basemaps) (GPL-3.0), Natural Earth (public domain), Mapzen terrain tiles, NASA Blue Marble.
+Everything the app shows comes from somewhere else. There are two kinds of use: **fetched once** by the pipeline (`scripts/`), with the results committed in `public/`, and **fetched live** by the browser on every visit.
+
+### Fetched once, by the pipeline
+
+| Source | What we use it for | How | License |
+|---|---|---|---|
+| [Wikidata](https://www.wikidata.org) | the events: classes, dates, coordinates, locations, "part of" links, sitelink counts | SPARQL through the public [QLever](https://qlever.dev) endpoint (`fetch-events.ts`), plus the entity API `wbgetclaims` for the order of listed locations | CC0 |
+| [English Wikipedia](https://en.wikipedia.org) | each article's in-degree (incoming links) and its `{{coord}}` coordinates | Action API, `prop=cirrusdoc\|coordinates` (`fetch-wikipedia.ts`) | the numbers are facts; article text is CC BY-SA 4.0, and none of it is stored |
+| [historical-basemaps](https://github.com/aourednik/historical-basemaps) by André Ourednik | the 48 historical border snapshots | raw GeoJSON from GitHub, simplified with mapshaper (`fetch-geo.ts`) → `public/geo/borders/` | GPL-3.0: the processed files in `public/geo/borders/` are a derivative and stay under it |
+| [Natural Earth](https://www.naturalearthdata.com) 1:50m | land, ocean, lakes and rivers | GeoJSON from [natural-earth-vector](https://github.com/nvkelso/natural-earth-vector) (`fetch-geo.ts`) → `public/geo/` | public domain |
+| Fonts via [fontsource](https://fontsource.org): Inter, Source Serif 4, Cinzel, Almendra, IM Fell English, Playfair Display, Noto Serif | all UI and map-label typography | woff2 and TTF from fontsource's CDN (`fetch-fonts.ts`) → `public/fonts/` | SIL Open Font License 1.1; each family's license ships in `public/fonts/licenses/` |
+
+The graticule and portolan rhumb lines in `public/geo/` are generated by `fetch-geo.ts`, and the era textures by `components/globe/textures.ts`. Neither has an outside source.
+
+### Fetched live, by the browser
+
+| Source | What for | License / credit |
+|---|---|---|
+| [Wikipedia Action API](https://www.mediawiki.org/wiki/API:Parse) `action=parse`, lead section | the event panel's text, with its links: a link to one of our events opens it in the app, any other opens Wikipedia | CC BY-SA 4.0, linked back through "Read on Wikipedia". Only text, bold, italics and links are kept, rebuilt as React elements, never injected as HTML |
+| [Wikipedia REST API](https://en.wikipedia.org/api/rest_v1/) `page/summary` | the panel's thumbnail, and plain-text fallback while the lead loads | text CC BY-SA 4.0; thumbnails come from Wikimedia Commons, each under its own license (see the image's Commons page) |
+| [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen Terrarium, AWS Open Data) | the hillshaded relief of the older eras | free with attribution; credited on the map as "Terrain: Mapzen / AWS" |
+| [NASA GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) Blue Marble Shaded Relief & Bathymetry | the modern era's satellite imagery | NASA imagery, no copyright; credited on the map as "NASA Blue Marble" |
+| [MapLibre demo glyphs](https://demotiles.maplibre.org) | fallback only: map characters outside the bundled latin fonts | free to use |
+
+The map's attribution control (bottom right) credits Natural Earth, historical-basemaps, Wikidata and Wikipedia, the terrain tiles and NASA while each is on screen.
+
+## Deploy
+
+It's a static site: `npm run build` writes `dist/`, and everything it needs is committed in `public/`, so the host never runs the data pipeline. On Cloudflare, connect the repo under Workers & Pages → Pages and set:
+
+| Setting | Value |
+|---|---|
+| Framework preset | Vite (or None) |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+
+Node comes from `.node-version` (24), and `public/_headers` sets the caching: fingerprinted `/assets` forever, fonts for a year, data and geography for a day. State lives in the URL hash, so there are no routes to rewrite. Every push to `main` deploys, and other branches get preview URLs.

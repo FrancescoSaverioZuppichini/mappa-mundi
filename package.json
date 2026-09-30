@@ -1,18 +1,20 @@
 {
-  "name": "wikihistory",
+  "name": "mappa-mundi",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "biome check",
     "preview": "vite preview",
-    "data": "node scripts/fetch-events.ts && node scripts/fetch-wikipedia.ts && node scripts/export-events.ts && node scripts/fetch-geo.ts",
+    "data": "node scripts/fetch-events.ts && node scripts/fetch-wikipedia.ts && node scripts/export-events.ts && node scripts/fetch-geo.ts && node scripts/fetch-fonts.ts",
     "data:events": "node scripts/fetch-events.ts",
     "data:geo": "node scripts/fetch-geo.ts",
     "data:export": "node scripts/export-events.ts",
-    "data:wikipedia": "node scripts/fetch-wikipedia.ts"
+    "data:wikipedia": "node scripts/fetch-wikipedia.ts",
+    "data:fonts": "node scripts/fetch-fonts.ts",
+    "format": "biome check --write"
   },
   "dependencies": {
     "date-fns": "^4.4.0",
@@ -22,13 +24,13 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "mapshaper": "^0.7.69",
-    "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"

@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  // The project's style, so editors format to it instead of to Biome's defaults.
+  "files": { "includes": ["src/**", "scripts/**", "*.ts", "*.json", "*.jsonc", "!public", "!dist", "!data"] },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 200 },
+  "javascript": {
+    "formatter": { "quoteStyle": "single", "jsxQuoteStyle": "double", "semicolons": "asNeeded", "arrowParentheses": "asNeeded", "trailingCommas": "all" }
+  },
+  "css": { "parser": { "tailwindDirectives": true } },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        // Every `!` in this code is guaranteed by construction: ref.current inside effects, #root, getContext('2d'),
+        // and SPARQL variables the query always binds. Guarding them would add branches that can't run.
+        "noNonNullAssertion": "off"
+      }
+    }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

@@ -1,4 +1,4 @@
-// [Agent] English Wikipedia facts per event article, cached in the `articles` table so only articles not fetched yet are asked for. Pass --refresh to refetch everything.
+// [Agent] Responsibility: English Wikipedia facts → data/history.sqlite: each event article's in-degree and coordinates, cached per article.
 // - in-degree: how many articles link here (CirrusSearch incoming_links), the raw material of the importance score;
 // - coordinates: the article's primary {{coord}}. Many battles have one on Wikipedia but none on Wikidata, naval battles especially.
 // Both come from one call per 50 titles (prop=cirrusdoc|coordinates), instead of parsing the multi-gigabyte pagelinks and geo_tags dumps. cdincludes keeps just the one field of the search document, 24KB a batch instead of the 2.5MB full document.
@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 const BATCH = 50
 const WORKERS = 4
-const USER_AGENT = 'wikihistory/0.1 (francesco@scrapegraphai.com)'
+const USER_AGENT = 'mappa-mundi/0.1 (francesco@scrapegraphai.com)'
 
 type Page = { title: string; cirrusdoc?: { source: { incoming_links?: number } }[]; coordinates?: { lat: number; lon: number }[] }
 type Response = { error?: { code: string }; query: { normalized?: { from: string; to: string }[]; pages: Page[] } }
@@ -49,11 +49,13 @@ async function fetchBatch(articles: string[]) {
 console.log(`${pending.length} articles to fetch`)
 const batches = Array.from({ length: Math.ceil(pending.length / BATCH) }, (_, i) => pending.slice(i * BATCH, (i + 1) * BATCH))
 let done = 0
-await Promise.all(Array.from({ length: WORKERS }, async () => {
-  for (let batch = batches.shift(); batch; batch = batches.shift()) {
-    await fetchBatch(batch)
-    if (++done % 100 === 0) console.log(`  ${done * BATCH} fetched`)
-  }
-}))
+await Promise.all(
+  Array.from({ length: WORKERS }, async () => {
+    for (let batch = batches.shift(); batch; batch = batches.shift()) {
+      await fetchBatch(batch)
+      if (++done % 100 === 0) console.log(`  ${done * BATCH} fetched`)
+    }
+  }),
+)
 const { located, total } = db.prepare('SELECT count(lat) AS located, count(*) AS total FROM articles').get() as { located: number; total: number }
 console.log(`✓ ${total} articles, ${located} with coordinates`)

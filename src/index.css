@@ -1,4 +1,6 @@
-@import 'tailwindcss';
+/* [Agent] Responsibility: Tailwind, the theme tokens the epochs rewrite at runtime, and the few custom utilities and keyframes. */
+
+@import "tailwindcss";
 
 /* [Agent] Tailwind tokens point at CSS variables that App.tsx rewrites on every epoch change, so `bg-paper`, `text-on-space` and the rest restyle live. Display type follows the epoch; UI and body text stay in Inter and Source Serif so small text is always legible. */
 @theme inline {
@@ -9,8 +11,8 @@
   --color-on-space: var(--on-space);
   --color-highlight: var(--highlight);
   --font-display: var(--display-font);
-  --font-ui: 'Inter', system-ui, sans-serif;
-  --font-serif: 'Source Serif 4', Georgia, serif;
+  --font-ui: "Inter", system-ui, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, serif;
   /* [Agent] One motion language: everything eases out on the same expo curve. Panels glide in, menus and tooltips pop in, buttons press. */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --animate-panel-in: panel-in 0.5s var(--ease-out-expo);
@@ -66,7 +68,7 @@
   --space: #1a2126;
   --on-space: #f6efdc;
   --highlight: #e3836a;
-  --display-font: 'IM Fell English', serif;
+  --display-font: "IM Fell English", serif;
 }
 
 html,
@@ -79,26 +81,26 @@ body,
 body {
   background: var(--space);
   overflow: hidden;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* [Agent] The Detail slider: a hairline track and a small glowing thumb instead of the browser's chunky default. */
-input[type='range'].hairline {
+input[type="range"].hairline {
   appearance: none;
   height: 16px;
   background: transparent;
   cursor: pointer;
 }
-input[type='range'].hairline::-webkit-slider-runnable-track {
+input[type="range"].hairline::-webkit-slider-runnable-track {
   height: 1px;
   background: color-mix(in srgb, var(--on-space) 30%, transparent);
 }
-input[type='range'].hairline::-moz-range-track {
+input[type="range"].hairline::-moz-range-track {
   height: 1px;
   background: color-mix(in srgb, var(--on-space) 30%, transparent);
 }
-input[type='range'].hairline::-webkit-slider-thumb {
+input[type="range"].hairline::-webkit-slider-thumb {
   appearance: none;
   width: 11px;
   height: 11px;
@@ -106,13 +108,15 @@ input[type='range'].hairline::-webkit-slider-thumb {
   border-radius: 50%;
   background: var(--highlight);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--highlight) 22%, transparent);
-  transition: transform 0.15s var(--ease-out-expo), box-shadow 0.15s;
+  transition:
+    transform 0.15s var(--ease-out-expo),
+    box-shadow 0.15s;
 }
-input[type='range'].hairline:hover::-webkit-slider-thumb {
+input[type="range"].hairline:hover::-webkit-slider-thumb {
   transform: scale(1.2);
   box-shadow: 0 0 0 6px color-mix(in srgb, var(--highlight) 18%, transparent);
 }
-input[type='range'].hairline::-moz-range-thumb {
+input[type="range"].hairline::-moz-range-thumb {
   width: 11px;
   height: 11px;
   border: 0;
@@ -129,7 +133,9 @@ input[type='range'].hairline::-moz-range-thumb {
 .maplibregl-ctrl.maplibregl-ctrl-attrib {
   background: transparent;
   color: color-mix(in srgb, var(--on-space) 40%, transparent);
-  font: 10px 'Inter', sans-serif;
+  font:
+    10px "Inter",
+    sans-serif;
 }
 .maplibregl-ctrl-attrib a {
   color: inherit;

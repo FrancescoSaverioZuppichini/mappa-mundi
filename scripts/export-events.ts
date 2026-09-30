@@ -1,4 +1,4 @@
-// [Agent] SQLite facts → what the browser loads. The fetch scripts only collect facts; every decision about which events ship, where they sit and how important they are is made here.
+// [Agent] Responsibility: every decision about the data. SQLite facts → public/data/events.bin + events-meta.json: which events ship, where they sit and how important they are.
 // events.bin holds the numeric columns, and events-meta.json the strings only the UI needs. Rows are sorted by score, most important first, so the app ranks events by walking from the top.
 //
 // Position, first match wins:
@@ -11,18 +11,33 @@
 // score = robust in-degree × category weight:
 // - Robust in-degree: CirrusSearch counts links that arrive through navbox templates, so an article in a navbox transcluded on 20k pages gets 20k "links" (the 2021 Austin shooting: 20,022 in-links, one language edition). Real prominence also shows up across languages. Canonical events sit at or below ~55 x sitelinks^1.5 (WWII 44, the French Revolution 6), while template-inflated articles sit at 170-190. So in-degree is capped at 60x, about the 95th percentile.
 // - Category weight (categories.ts) damps places, whose links measure the modern city rather than its founding.
-import { DatabaseSync } from 'node:sqlite'
+
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { CATEGORIES } from '../src/model/categories.ts'
+import { DatabaseSync } from 'node:sqlite'
+import { CATEGORIES } from '../src/lib/categories.ts'
 
 // [Agent] The floor for existing at all. A tenth of articles have zero incoming links and the bottom fifth fewer than ten: orphan stubs nobody links to.
 const MIN_INLINKS = 10
 const TEMPLATE_CAP = 60
 
 type Row = {
-  qid: string; label: string; article: string; category: number; year: number; year_end: number; sitelinks: number; inlinks: number
-  own_lon: number | null; own_lat: number | null; article_lon: number | null; article_lat: number | null
-  parts_lon: number | null; parts_lat: number | null; parts: number; loc_lon: number | null; loc_lat: number | null
+  qid: string
+  label: string
+  article: string
+  category: number
+  year: number
+  year_end: number
+  sitelinks: number
+  inlinks: number
+  own_lon: number | null
+  own_lat: number | null
+  article_lon: number | null
+  article_lat: number | null
+  parts_lon: number | null
+  parts_lat: number | null
+  parts: number
+  loc_lon: number | null
+  loc_lat: number | null
 }
 
 function position(r: Row): { lon: number; lat: number; by: string } | null {
@@ -34,9 +49,11 @@ function position(r: Row): { lon: number; lat: number; by: string } | null {
 }
 
 const db = new DatabaseSync('data/history.sqlite', { readOnly: true })
-const rows = db.prepare(`
+const rows = db
+  .prepare(`
   SELECT e.*, coalesce(e.year_end, e.year) AS year_end, a.inlinks, a.lon AS article_lon, a.lat AS article_lat
-  FROM events e JOIN articles a USING (article) WHERE a.inlinks >= ${MIN_INLINKS}`).all() as Row[]
+  FROM events e JOIN articles a USING (article) WHERE a.inlinks >= ${MIN_INLINKS}`)
+  .all() as Row[]
 
 const placedBy: Record<string, number> = {}
 const events = rows
@@ -81,7 +98,16 @@ mkdirSync('public/data', { recursive: true })
 writeFileSync('public/data/events.bin', new Uint8Array(buffer))
 writeFileSync('public/data/events-meta.json', JSON.stringify(meta))
 
-console.log(`✓ ${n} events, placed by ${Object.entries(placedBy).map(([by, count]) => `${by} ${count}`).join(', ')}`)
+console.log(
+  `✓ ${n} events, placed by ${Object.entries(placedBy)
+    .map(([by, count]) => `${by} ${count}`)
+    .join(', ')}`,
+)
 console.log(`  ${CATEGORIES.map((c, i) => `${c.name}: ${events.filter(r => r.category === i).length}`).join('  ')}`)
-console.log(`  top: ${events.slice(0, 12).map(r => r.label).join(' · ')}`)
+console.log(
+  `  top: ${events
+    .slice(0, 12)
+    .map(r => r.label)
+    .join(' · ')}`,
+)
 console.log(`  events.bin ${(buffer.byteLength / 1e6).toFixed(1)}MB, events-meta.json ${(JSON.stringify(meta).length / 1e6).toFixed(1)}MB`)

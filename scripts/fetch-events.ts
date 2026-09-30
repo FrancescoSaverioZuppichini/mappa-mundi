@@ -1,14 +1,15 @@
-// [Agent] Wikidata facts → SQLite, through QLever (WDQS times out and truncates the big classes, QLever returns them whole in seconds).
+// [Agent] Responsibility: Wikidata facts → data/history.sqlite. Queries QLever per category class and records every event's dates, sitelinks and position candidates. It decides nothing: export-events.ts does.
 // This script only records facts. Every position candidate is kept side by side (own coordinates, sub-event median, first-listed location), and export-events.ts decides which one to use, alongside the Wikipedia facts from fetch-wikipedia.ts.
 // Every class in CATEGORIES is logged in `fetched` once it lands, so a crashed run resumes. `--refresh` rebuilds the table from scratch, and category names limit the run to those.
-import { DatabaseSync } from 'node:sqlite'
+
 import { mkdirSync } from 'node:fs'
-import { CATEGORIES } from '../src/model/categories.ts'
+import { DatabaseSync } from 'node:sqlite'
+import { CATEGORIES } from '../src/lib/categories.ts'
 
 const args = process.argv.slice(2)
 const refresh = args.includes('--refresh')
 const only = args.filter(a => !a.startsWith('--'))
-const USER_AGENT = 'wikihistory/0.1 (francesco@scrapegraphai.com)'
+const USER_AGENT = 'mappa-mundi/0.1 (francesco@scrapegraphai.com)'
 
 mkdirSync('data', { recursive: true })
 const db = new DatabaseSync('data/history.sqlite')
@@ -79,7 +80,7 @@ async function sparql(query: string): Promise<Binding[]> {
       const body = await res.text()
       if (!res.ok) throw new Error(`${res.status} ${body.slice(0, 160)}`)
       // [Agent] Raw control characters sometimes leak into labels, and JSON.parse rejects them. Outside strings they are only whitespace, so blanking them is safe.
-      // eslint-disable-next-line no-control-regex
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is exactly what this does.
       return JSON.parse(body.replace(/[\u0000-\u001f]/g, ' ')).results.bindings
     } catch (err) {
       if (attempt === 3) throw err
@@ -99,7 +100,7 @@ function parsePoint(wkt?: string): Point | undefined {
 // [Agent] RDF dates use astronomical numbering, where year 0 is 1 BC and Marathon (490 BC) is "-0489". Non-positive years shift down by one so the DB stores historical years. Unknown values arrive as blank nodes, which the pattern rejects.
 function parseYear(iso?: string) {
   if (!iso || !/^-?\d+-/.test(iso)) return undefined
-  const year = parseInt(iso)
+  const year = Number.parseInt(iso, 10)
   return year <= 0 ? year - 1 : year
 }
 
@@ -107,7 +108,11 @@ function parseYear(iso?: string) {
 function medianPoint(points: Point[]): Point {
   const middle = (values: number[]) => values.sort((a, b) => a - b)[values.length >> 1]
   const rad = Math.PI / 180
-  const ref = Math.atan2(points.reduce((s, [lon]) => s + Math.sin(lon * rad), 0), points.reduce((s, [lon]) => s + Math.cos(lon * rad), 0)) / rad
+  const ref =
+    Math.atan2(
+      points.reduce((s, [lon]) => s + Math.sin(lon * rad), 0),
+      points.reduce((s, [lon]) => s + Math.cos(lon * rad), 0),
+    ) / rad
   const lon = ref + middle(points.map(([lon]) => ((lon - ref + 540) % 360) - 180))
   return [((lon + 540) % 360) - 180, middle(points.map(([, lat]) => lat))]
 }
@@ -117,26 +122,36 @@ async function firstListedLocations(qids: string[]) {
   type Claims = { claims?: { P276?: { mainsnak: { datavalue?: { value: { id: string } } } }[] } }
   const order = new Map<string, string[]>()
   const queue = [...qids]
-  await Promise.all([0, 1, 2, 3].map(async () => {
-    for (let qid = queue.shift(); qid; qid = queue.shift()) {
-      for (let attempt = 1; attempt <= 4; attempt++) {
-        const url = `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P276&format=json`
-        const body = (await fetch(url, { headers: { 'User-Agent': USER_AGENT } }).then(r => (r.ok ? r.json() : null)).catch(() => null)) as Claims | null
-        if (body?.claims) {
-          order.set(qid, (body.claims.P276 ?? []).flatMap(c => c.mainsnak.datavalue?.value.id ?? []))
-          break
+  await Promise.all(
+    [0, 1, 2, 3].map(async () => {
+      for (let qid = queue.shift(); qid; qid = queue.shift()) {
+        for (let attempt = 1; attempt <= 4; attempt++) {
+          const url = `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P276&format=json`
+          const body = (await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
+            .then(r => (r.ok ? r.json() : null))
+            .catch(() => null)) as Claims | null
+          if (body?.claims) {
+            order.set(
+              qid,
+              (body.claims.P276 ?? []).flatMap(c => c.mainsnak.datavalue?.value.id ?? []),
+            )
+            break
+          }
+          await new Promise(r => setTimeout(r, 2_000 * attempt))
         }
-        await new Promise(r => setTimeout(r, 2_000 * attempt))
       }
-    }
-  }))
+    }),
+  )
   return order
 }
 
 async function fetchClass(category: number, cls: string) {
   const name = `${CATEGORIES[category].name}/${cls}`
   const started = Date.now()
-  const results = await Promise.all([sparql(eventsQuery(cls)), sparql(subEventsQuery(cls))]).catch(err => (console.error(`✗ ${name}: ${err.message}`), null))
+  const results = await Promise.all([sparql(eventsQuery(cls)), sparql(subEventsQuery(cls))]).catch(err => {
+    console.error(`✗ ${name}: ${err.message}`)
+    return null
+  })
   if (!results) return
   const [rows, parts] = results
 
@@ -177,8 +192,22 @@ async function fetchClass(category: number, cls: string) {
     const median = points.length ? medianPoint(points) : undefined
     const firstLoc = listed.get(qid)?.find(loc => item.locations.has(loc)) ?? [...item.locations.keys()][0]
     const loc = firstLoc ? item.locations.get(firstLoc) : undefined
-    upsert.run(qid, item.label, item.article, category, year, end, item.sitelinks,
-      item.own?.[0] ?? null, item.own?.[1] ?? null, median?.[0] ?? null, median?.[1] ?? null, points.length, loc?.[0] ?? null, loc?.[1] ?? null)
+    upsert.run(
+      qid,
+      item.label,
+      item.article,
+      category,
+      year,
+      end,
+      item.sitelinks,
+      item.own?.[0] ?? null,
+      item.own?.[1] ?? null,
+      median?.[0] ?? null,
+      median?.[1] ?? null,
+      points.length,
+      loc?.[0] ?? null,
+      loc?.[1] ?? null,
+    )
   }
   markFetched.run(cls, items.size)
   db.exec('COMMIT')
@@ -186,11 +215,12 @@ async function fetchClass(category: number, cls: string) {
 }
 
 // [Agent] Two workers: QLever is fast, and it's a shared academic service, so there's no point hammering it.
-const jobs = CATEGORIES.flatMap(({ name, classes }, category) =>
-  only.length && !only.includes(name) ? [] : classes.filter(c => refresh || !alreadyFetched.has(c)).map(cls => ({ category, cls })))
-await Promise.all([0, 1].map(async () => {
-  for (let job = jobs.shift(); job; job = jobs.shift()) await fetchClass(job.category, job.cls)
-}))
+const jobs = CATEGORIES.flatMap(({ name, classes }, category) => (only.length && !only.includes(name) ? [] : classes.filter(c => refresh || !alreadyFetched.has(c)).map(cls => ({ category, cls }))))
+await Promise.all(
+  [0, 1].map(async () => {
+    for (let job = jobs.shift(); job; job = jobs.shift()) await fetchClass(job.category, job.cls)
+  }),
+)
 
 const counts = db.prepare('SELECT category, count(*) AS n FROM events GROUP BY category').all() as { category: number; n: number }[]
-console.log('\n' + counts.map(r => `${CATEGORIES[r.category].name}: ${r.n}`).join('  '))
+console.log(`\n${counts.map(r => `${CATEGORIES[r.category].name}: ${r.n}`).join('  ')}`)
