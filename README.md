@@ -502,9 +502,9 @@ Node comes from `.node-version` (24), and `public/_headers` sets the caching: fi
 
 ## Dataset
 
-The data is published on Hugging Face as **[Francesco/mappa-mundi-events](https://huggingface.co/datasets/Francesco/mappa-mundi-events)**: `events.arrow` (the same file the app ships) and `leads.arrow`, with a dataset card describing every column. `npm run data:publish` uploads both in one commit; `npm run data:publish -- README.md` uploads just the named files. It reads `HF_TOKEN` from `.env`.
+The data is published on Hugging Face as **[Francesco/mappa-mundi](https://huggingface.co/datasets/Francesco/mappa-mundi)**: `events.arrow` (the same file the app ships) and `leads.arrow`, with a dataset card describing every column. `npm run data:publish` uploads both in one commit; `npm run data:publish -- README.md` uploads just the named files. It reads `HF_TOKEN` from `.env`.
 
 ```python
 import pandas as pd
-events = pd.read_feather("hf://datasets/Francesco/mappa-mundi-events/events.arrow")
+events = pd.read_feather("hf://datasets/Francesco/mappa-mundi/events.arrow")
 ```

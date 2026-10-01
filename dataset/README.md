@@ -1,6 +1,6 @@
 ---
 license: cc-by-sa-4.0
-pretty_name: Mappa Mundi Events
+pretty_name: Mappa Mundi
 language:
   - en
 size_categories:
@@ -20,7 +20,7 @@ configs:
     data_files: leads.arrow
 ---
 
-# Mappa Mundi Events
+# Mappa Mundi
 
 53,868 historical events from 3000 BC to today, each placed on the globe and ranked by how much the rest of Wikipedia points at it. The top of the list is World War II, World War I, the COVID-19 pandemic and the American Civil War. It's the data behind Mappa Mundi, an atlas of history you drag through time.
 
@@ -79,23 +79,23 @@ Null means Wikipedia had nothing for that field.
 
 ```python
 import pandas as pd
-events = pd.read_feather("hf://datasets/Francesco/mappa-mundi-events/events.arrow")
-leads = pd.read_feather("hf://datasets/Francesco/mappa-mundi-events/leads.arrow")
+events = pd.read_feather("hf://datasets/Francesco/mappa-mundi/events.arrow")
+leads = pd.read_feather("hf://datasets/Francesco/mappa-mundi/leads.arrow")
 ```
 
 ```python
 import polars as pl
-events = pl.read_ipc("hf://datasets/Francesco/mappa-mundi-events/events.arrow")
+events = pl.read_ipc("hf://datasets/Francesco/mappa-mundi/events.arrow")
 ```
 
 ```python
 from datasets import load_dataset
-events = load_dataset("Francesco/mappa-mundi-events", "events", split="train")
+events = load_dataset("Francesco/mappa-mundi", "events", split="train")
 ```
 
 ```js
 import { tableFromIPC } from '@uwdata/flechette'
-const url = 'https://huggingface.co/datasets/Francesco/mappa-mundi-events/resolve/main/events.arrow'
+const url = 'https://huggingface.co/datasets/Francesco/mappa-mundi/resolve/main/events.arrow'
 const events = tableFromIPC(await (await fetch(url)).arrayBuffer())
 events.getChild('lon').toArray() // a Float32Array over the downloaded bytes, no copy
 ```

@@ -1855,6 +1855,6 @@ The data path grows around the same Feather file:
 - **Wikipedia leads.** `scripts/fetch-leads.ts` fetches each article's lead section with `action=parse`, the only API that keeps the links, and cleans it down to paragraphs, bold, italics and `/wiki/` links. The export writes them to a second Feather file, `leads.arrow`, in the same row order. See [The shipped files](README.md#the-shipped-files).
 - **D1 and a Worker.** The app never downloads all the leads. `scripts/seed-db.ts` loads them into a Cloudflare D1 database, and `worker/index.ts` serves one per opened event at `/api/leads/:qid`. See [Deploy](README.md#deploy).
 - **ZSTD.** Both files are compressed: `events.arrow` drops from 5 MB to 1.7 MB, and the app unzips each column once before viewing it. See [docs/zero-copy.md](docs/zero-copy.md#compression-breaks-it).
-- **A public dataset.** The very `events.arrow` the app serves, and `leads.arrow`, are on Hugging Face as [Francesco/mappa-mundi-events](https://huggingface.co/datasets/Francesco/mappa-mundi-events), so `pd.read_feather` opens them. See [Dataset](README.md#dataset).
+- **A public dataset.** The very `events.arrow` the app serves, and `leads.arrow`, are on Hugging Face as [Francesco/mappa-mundi](https://huggingface.co/datasets/Francesco/mappa-mundi), so `pd.read_feather` opens them. See [Dataset](README.md#dataset).
 
 Thank you for reading!

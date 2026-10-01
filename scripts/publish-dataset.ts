@@ -1,10 +1,10 @@
-// [Agent] Responsibility: the dataset → Hugging Face (Francesco/mappa-mundi-events), as one commit: both Feather files and the dataset card. Run after export-events.ts. The token comes from .env (HF_TOKEN), loaded by `npm run data:publish` through node --env-file.
+// [Agent] Responsibility: the dataset → Hugging Face (Francesco/mappa-mundi), as one commit: both Feather files and the dataset card. Run after export-events.ts. The token comes from .env (HF_TOKEN), loaded by `npm run data:publish` through node --env-file.
 
 import { pathToFileURL } from 'node:url'
 import { createRepo, repoExists, uploadFiles } from '@huggingface/hub'
 import { EVENTS_FILE, LEADS_FILE } from './consts.ts'
 
-const repo = { type: 'dataset', name: 'Francesco/mappa-mundi-events' } as const
+const repo = { type: 'dataset', name: 'Francesco/mappa-mundi' } as const
 const accessToken = process.env.HF_TOKEN
 if (!accessToken) throw new Error('HF_TOKEN is missing: put it in .env')
 
