@@ -1,19 +1,23 @@
 // [Agent] Responsibility: the shapes more than one file shares: the data, the state and its patches, and the epoch config.
 
-// [Agent] The events as columns: row i of every array is event i. Rows are sorted by score, most important first, so row 0 is the most important event in history. scripts/export-events.ts writes this layout.
+// [Agent] The events as columns, exactly as events.arrow stores them: row i of every array is event i. Rows are sorted by score, most important first, so row 0 is the most important event in history. scripts/export-events.ts writes the file, hooks/useHistory.ts loads it. The numeric columns are views over the file's bytes; category is the CATEGORIES index of the file's category name.
 export type EventsData = {
   count: number
-  positions: Float32Array
+  qid: string[]
+  label: string[]
+  article: string[]
+  category: Uint8Array
   start: Float32Array
   end: Float32Array
+  lon: Float32Array
+  lat: Float32Array
   score: Float32Array
   inlinks: Float32Array
   sitelinks: Float32Array
-  category: Uint8Array
-  qid: number[]
-  label: string[]
-  article: string[]
 }
+
+// [Agent] One event's Wikipedia text, as worker/index.ts serves it from D1. lead_html is cleaned by scripts/fetch-leads.ts: <p> paragraphs with text, bold, italics and /wiki/ links.
+export type Lead = { description: string | null; lead_html: string | null; thumbnail: string | null }
 
 export type TimeWindow = [start: number, end: number]
 

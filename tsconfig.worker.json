@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.node.json",
+  // [Agent] The Node scripts' settings, minus Node and the DOM: a Worker runs on the Workers runtime, which worker-configuration.d.ts describes (generated from wrangler.jsonc by `npm run types`).
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "lib": ["ES2023"],
+    "types": [],
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["worker", "worker-configuration.d.ts"]
+}

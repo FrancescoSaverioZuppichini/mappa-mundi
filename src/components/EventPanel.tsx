@@ -7,14 +7,11 @@ import { CATEGORIES } from '../lib/categories'
 import { rank } from '../lib/rank'
 import { distanceKm, nextInStory } from '../lib/story'
 import { formatYears, windowOf } from '../lib/time'
+import type { Lead } from '../types'
 import { ArrowIcon, CloseIcon, NextIcon, PlayIcon } from './icons'
-
-type Summary = { extract: string; thumbnail?: { source: string }; content_urls: { desktop: { page: string } } }
 
 // [Agent] Article title → event, to turn links to our own events into in-app links. Titles are compared with spaces, because links write them with underscores and the data sometimes doesn't.
 const EVENT_BY_ARTICLE = new Map(events.article.map((article, i) => [article.replaceAll('_', ' '), i]))
-// [Agent] Parts of the lead that aren't prose: footnote markers, coordinates, pronunciation and hidden helpers.
-const SKIP = 'sup, style, .reference, .mw-ref, .noprint, .mw-empty-elt, #coordinates, .IPA, .rt-commentedText'
 const LEAD_PARAGRAPHS = 3
 
 const RELATED = 5
@@ -23,13 +20,12 @@ const SAME_PLACE_KM = 150
 
 export function EventPanel() {
   const selected = useHistory(s => s.selected)
-  // [Agent] Keyed by event, so switching events remounts the card with a fresh, empty summary instead of briefly showing the previous one.
+  // [Agent] Keyed by event, so switching events remounts the card with a fresh, empty lead instead of briefly showing the previous one.
   return selected === null ? null : <EventCard key={selected} index={selected} />
 }
 
 function EventCard({ index }: { index: number }) {
-  const [summary, setSummary] = useState<Summary | null>(null)
-  const lead = useLead(events.article[index])
+  const lead = useLead(events.qid[index])
   const update = useHistory(s => s.update)
   // [Agent] Esc closes the card. The listener lives here, so it exists only while a card is open.
   useEffect(() => {
@@ -42,24 +38,9 @@ function EventCard({ index }: { index: number }) {
   const category = CATEGORIES[events.category[index]]
   const color = category.color
 
-  useEffect(() => {
-    const abort = new AbortController()
-    fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(events.article[index])}`, { signal: abort.signal })
-      .then(r => (r.ok ? r.json() : null))
-      .then(setSummary)
-      .catch(() => {})
-    return () => abort.abort()
-  }, [index])
-
   // [Agent] Two ways to keep exploring from here. "Meanwhile" is the rest of the world during the same years, which is where the learning happens. "Same place" is this spot's history across all eras. Both walk the in-degree-sorted events once and keep the first few matches, so they are already the most important ones.
   const { meanwhile, samePlace } = useMemo(() => {
-    const lon0 = events.positions[index * 2]
-    const lat0 = events.positions[index * 2 + 1]
-    const cosLat = Math.cos((lat0 * Math.PI) / 180)
-    const km = (j: number) => {
-      const dLon = ((events.positions[j * 2] - lon0 + 540) % 360) - 180
-      return Math.hypot(dLon * cosLat * 111.3, (events.positions[j * 2 + 1] - lat0) * 110.6)
-    }
+    const km = (j: number) => distanceKm(events, index, j)
     // [Agent] Dating gets fuzzier the further back you go, so "the same years" widens with age: ±2 years for the 1940s, ±10 around 1066, ±25 in antiquity.
     const pad = Math.max(2, (YEAR_MAX - events.start[index]) * 0.01)
     const from = events.start[index] - pad
@@ -82,7 +63,7 @@ function EventCard({ index }: { index: number }) {
   return (
     <aside className="absolute top-20 right-5 bottom-36 z-20 flex w-[24rem] max-w-[calc(100vw-2.5rem)] animate-panel-in flex-col overflow-hidden rounded-2xl bg-paper text-ink shadow-[0_24px_60px_-24px_rgba(0,0,0,0.55)] ring-[0.5px] ring-ink/15">
       <div className="relative h-44 shrink-0 overflow-hidden" style={{ background: `linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 30%, var(--paper)))` }}>
-        {summary?.thumbnail && <img src={summary.thumbnail.source} alt="" className="size-full object-cover" />}
+        {lead?.thumbnail && <img src={lead.thumbnail} alt="" className="size-full object-cover" />}
         <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-paper to-transparent" />
         <button
           type="button"
@@ -116,24 +97,22 @@ function EventCard({ index }: { index: number }) {
           </div>
         </div>
 
-        {lead ? (
-          lead.map((paragraph, n) => (
+        {lead?.paragraphs.length ? (
+          lead.paragraphs.map((paragraph, n) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: the paragraphs of one article never reorder.
             <p key={n} className="mt-4 font-serif text-[15px] leading-[1.65] opacity-85">
               {inline(paragraph, j => update({ selected: j }))}
             </p>
           ))
         ) : (
-          <p className="mt-4 font-serif text-[15px] leading-[1.65] opacity-85">{summary?.extract ?? '…'}</p>
+          <p className="mt-4 font-serif text-[15px] leading-[1.65] opacity-85">{lead ? lead.description : '…'}</p>
         )}
 
         <div className="mt-3 flex gap-4 font-ui text-[12px] font-medium text-accent">
-          {summary && (
-            <a href={summary.content_urls.desktop.page} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
-              Read on Wikipedia <ArrowIcon />
-            </a>
-          )}
-          <a href={`https://www.wikidata.org/wiki/Q${events.qid[index]}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 opacity-70 hover:underline">
+          <a href={`https://en.wikipedia.org/wiki/${encodeURIComponent(events.article[index])}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
+            Read on Wikipedia <ArrowIcon />
+          </a>
+          <a href={`https://www.wikidata.org/wiki/${events.qid[index]}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 opacity-70 hover:underline">
             Wikidata <ArrowIcon />
           </a>
         </div>
@@ -167,7 +146,7 @@ function Related({ title, items }: { title: string; items: number[] }) {
   )
 }
 
-// [Agent] The panel's fixed footer: the story's next step (lib/story.ts) as a card that travels there, plus the thread autoplay. It stays in view however long the summary is, because it's the main way onward. While following, a hairline fills over the dwell time, so it's clear the map will move on by itself and when.
+// [Agent] The panel's fixed footer: the story's next step (lib/story.ts) as a card that travels there, plus the thread autoplay. It stays in view however long the lead is, because it's the main way onward. While following, a hairline fills over the dwell time, so it's clear the map will move on by itself and when.
 function WhatNext({ index }: { index: number }) {
   const update = useHistory(s => s.update)
   const next = useMemo(() => nextInStory(events, index, new Set()), [index])
@@ -227,30 +206,31 @@ function WhatNext({ index }: { index: number }) {
   )
 }
 
-// [Agent] The article's lead paragraphs, with their links. The summary endpoint returns plain text, so the lead comes from the parse API as HTML. Only the article's own top-level paragraphs are kept: the infobox has <p> tags too.
-function useLead(article: string) {
-  const [paragraphs, setParagraphs] = useState<Element[] | null>(null)
+// [Agent] The event's lead, description and thumbnail, one same-origin call. The lead arrives as clean HTML and is parsed only to be walked by inline(), never injected. A failed call still settles to an empty lead, so the card stops showing the ellipsis, and the console says why.
+function useLead(qid: string) {
+  const [lead, setLead] = useState<(Lead & { paragraphs: Element[] }) | null>(null)
   useEffect(() => {
     const abort = new AbortController()
-    const params = new URLSearchParams({ action: 'parse', page: article, prop: 'text', section: '0', redirects: '1', format: 'json', formatversion: '2', origin: '*' })
-    fetch(`https://en.wikipedia.org/w/api.php?${params}`, { signal: abort.signal })
-      .then(r => r.json())
-      .then((body: { parse?: { text: string } }) => {
-        if (!body.parse) return
-        const doc = new DOMParser().parseFromString(body.parse.text, 'text/html')
-        const kept = [...doc.querySelectorAll('.mw-parser-output > p')].filter(p => p.textContent?.trim())
-        if (kept.length) setParagraphs(kept.slice(0, LEAD_PARAGRAPHS))
+    fetch(`/api/leads/${qid}`, { signal: abort.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`${r.url}: ${r.status}`)
+        return r.json() as Promise<Lead>
       })
-      .catch(() => {})
+      .then(row => setLead({ ...row, paragraphs: [...new DOMParser().parseFromString(row.lead_html ?? '', 'text/html').body.children].slice(0, LEAD_PARAGRAPHS) }))
+      .catch(err => {
+        if (abort.signal.aborted) return
+        console.error(err)
+        setLead({ description: null, lead_html: null, thumbnail: null, paragraphs: [] })
+      })
     return () => abort.abort()
-  }, [article])
-  return paragraphs
+  }, [qid])
+  return lead
 }
 
-// [Agent] Wikipedia HTML → React, keeping only text, bold, italics and links. Nothing is injected as HTML, so nothing from the page can run. A link to one of our events opens it in the app; any other link opens Wikipedia.
+// [Agent] The cleaned lead → React: text, bold, italics and links, anything else unwrapped. Nothing is injected as HTML, so nothing from the page can run. A link to one of our events opens it in the app; any other link opens Wikipedia.
 function inline(node: Node, open: (event: number) => void, key = 0): ReactNode {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent
-  if (!(node instanceof Element) || node.matches(SKIP)) return null
+  if (!(node instanceof Element)) return null
   const children = [...node.childNodes].map((child, i) => inline(child, open, i))
   if (node.tagName === 'B') return <b key={key}>{children}</b>
   if (node.tagName === 'I') return <i key={key}>{children}</i>

@@ -1,7 +1,10 @@
 // [Agent] Responsibility: the store. Loads the data, holds the one state and update(), the only way to change it (the rules are lib/history.ts), and runs what moves by itself: Play, the story thread and the URL.
 
+import { CompressionType, setCompressionCodec, tableFromIPC } from '@uwdata/flechette'
+import { decompress } from 'fzstd'
 import { create } from 'zustand'
 import { DEFAULTS, DWELL_MS, HEADLINE_EVERY_MS, YEAR_MAX } from '../consts'
+import { CATEGORIES } from '../lib/categories'
 import { apply } from '../lib/history'
 import { rank } from '../lib/rank'
 import { nextInStory } from '../lib/story'
@@ -66,7 +69,7 @@ function scheduleUrl() {
   urlTimer = window.setTimeout(() => {
     urlTimer = 0
     const { time, selected } = useHistory.getState()
-    window.history.replaceState(null, '', `#${Math.round(time.year)},${Math.round(time.span)}y${selected === null ? '' : `,Q${events.qid[selected]}`}`)
+    window.history.replaceState(null, '', `#${Math.round(time.year)},${Math.round(time.span)}y${selected === null ? '' : `,${events.qid[selected]}`}`)
   }, 250)
 }
 
@@ -76,37 +79,33 @@ function fromUrl(): HistoryPatch {
   const a = Number(first)
   const b = Number.parseFloat(second)
   const time = second.endsWith('y') && b >= 1 ? { year: a, span: b } : b - a >= 1 ? { year: (a + b) / 2, span: b - a } : undefined
-  const selected = qid ? events.qid.indexOf(Number(qid.slice(1))) : -1
+  const selected = qid ? events.qid.indexOf(qid) : -1
   return { ...(time && { time }), ...(selected >= 0 && { selected }) }
 }
 
 // [Agent] Start from the shared link, if any. Last in the file, because it runs the reactions above and they need every variable declared.
 update(fromUrl())
 
-// [Agent] events.bin is a u32 count, then f32 columns (positions, start, end, score, inlinks, sitelinks) and a u8 category column. Each becomes a typed-array view into the one buffer, with no copying. A missing file behind the dev server's fallback comes back as index.html with a 200, so the content type is checked too.
+// [Agent] events.arrow, the same file as on Hugging Face, served by the site itself. ZSTD-compressed Feather: each column is unzipped once into its exact size, then read as a typed array over those bytes, nothing parsed (docs/zero-copy.md). The app only reads, so encode is never called. Strings decode once. Everything lives inside the function because this runs at the top of the module, before any later const exists. A missing file behind the dev server's fallback comes back as index.html with a 200, so the content type is checked too.
 async function loadEvents(): Promise<EventsData> {
-  const load = async (url: string) => {
-    const res = await fetch(url)
-    if (!res.ok || res.headers.get('content-type')?.includes('text/html')) throw new Error(`Could not load ${url} (${res.status})`)
-    return res
-  }
-  const [buffer, meta] = await Promise.all([
-    load('/data/events.bin').then(r => r.arrayBuffer()),
-    load('/data/events-meta.json').then(r => r.json() as Promise<{ qid: number[]; label: string[]; article: string[] }>),
-  ])
-  const n = new Uint32Array(buffer, 0, 1)[0]
+  setCompressionCodec(CompressionType.ZSTD, {
+    decode: (bytes, size) => decompress(bytes, new Uint8Array(size)),
+    encode: () => {
+      throw new Error('The app never writes Arrow')
+    },
+  })
+  const res = await fetch('/data/events.arrow')
+  if (!res.ok || res.headers.get('content-type')?.includes('text/html')) throw new Error(`Could not load events.arrow (${res.status})`)
+  const table = tableFromIPC(await res.arrayBuffer())
+  const { category, ...columns } = table.toColumns()
   return {
-    count: n,
-    positions: new Float32Array(buffer, 4, n * 2),
-    start: new Float32Array(buffer, 4 + n * 8, n),
-    end: new Float32Array(buffer, 4 + n * 12, n),
-    score: new Float32Array(buffer, 4 + n * 16, n),
-    inlinks: new Float32Array(buffer, 4 + n * 20, n),
-    sitelinks: new Float32Array(buffer, 4 + n * 24, n),
-    category: new Uint8Array(buffer, 4 + n * 28, n),
-    qid: meta.qid,
-    label: meta.label,
-    // [Agent] "" means the enwiki title is just the label, which the export strips to save bytes.
-    article: meta.article.map((a, i) => a || meta.label[i]),
-  }
+    ...columns,
+    count: table.numRows,
+    // [Agent] The file names categories; the app indexes CATEGORIES. A name it doesn't know means the file and the code disagree, which must not pass as "battle".
+    category: Uint8Array.from(category, (name: string) => {
+      const id = CATEGORIES.findIndex(c => c.name === name)
+      if (id < 0) throw new Error(`events.arrow has an unknown category: ${name}`)
+      return id
+    }),
+  } as EventsData
 }

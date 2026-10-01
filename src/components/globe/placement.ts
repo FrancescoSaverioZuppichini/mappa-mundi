@@ -53,7 +53,7 @@ export function placeEvents(events: EventsData, viewport: Viewport, query: Query
   const population = ranked.length
   const target = detailTarget(query.detail)
   const pool = Math.max(Math.ceil(population * Math.min(1, BASE_SHARE * 2 ** (viewport.zoom - BASE_ZOOM))), target * 3)
-  const locate = (i: number) => viewport.locate(events.positions[i * 2], events.positions[i * 2 + 1])
+  const locate = (i: number) => viewport.locate(events.lon[i], events.lat[i])
 
   // [Agent] 1 and 2. The pinned event joins even from outside the pool, at full size and always labelled, so the open event never vanishes from the map.
   const pinned = new Set(query.pinned)

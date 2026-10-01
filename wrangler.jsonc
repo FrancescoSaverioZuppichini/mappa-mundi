@@ -1,8 +1,13 @@
-// [Agent] An assets-only Worker: no server code, Cloudflare serves dist/ as static files and applies public/_headers. State lives in the URL hash, so there is no SPA fallback to configure.
+// [Agent] Static files plus one small Worker for /api/* (worker/index.ts), which reads D1. The Cloudflare Vite plugin builds both and points `wrangler deploy` at the output.
 {
   "name": "mappa-mundi",
   "compatibility_date": "2026-09-30",
-  "assets": { "directory": "./dist" },
-  // [Agent] Said explicitly because the dashboard created the project with the workers.dev URL off, and the config is what every deploy enforces.
-  "workers_dev": true
+  "main": "./worker/index.ts",
+  "assets": { "run_worker_first": ["/api/*"] },
+  // [Agent] Explicit because the dashboard created the project with the workers.dev URL off.
+  "workers_dev": true,
+  // [Agent] No secrets. Declaring that keeps wrangler from loading .env (HF_TOKEN, for the dataset upload) into the Worker.
+  "secrets": { "required": [] },
+  // [Agent] The Wikipedia leads, filled by `npm run db:seed` (add -- --remote for this one).
+  "d1_databases": [{ "binding": "DB", "database_name": "mappa-mundi", "database_id": "03fcefae-84ae-4316-82ac-d3b2fd7baa6b" }]
 }

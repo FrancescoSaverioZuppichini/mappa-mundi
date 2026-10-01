@@ -5,19 +5,25 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "wrangler types && tsc -b && vite build",
     "lint": "biome check",
     "preview": "vite preview",
-    "data": "node scripts/fetch-events.ts && node scripts/fetch-wikipedia.ts && node scripts/export-events.ts && node scripts/fetch-geo.ts && node scripts/fetch-fonts.ts",
+    "data": "node scripts/fetch-events.ts && node --env-file-if-exists=.env scripts/fetch-wikipedia.ts && node --env-file-if-exists=.env scripts/fetch-leads.ts && node scripts/export-events.ts && node scripts/fetch-geo.ts && node scripts/fetch-fonts.ts",
     "data:events": "node scripts/fetch-events.ts",
     "data:geo": "node scripts/fetch-geo.ts",
     "data:export": "node scripts/export-events.ts",
-    "data:wikipedia": "node scripts/fetch-wikipedia.ts",
+    "data:wikipedia": "node --env-file-if-exists=.env scripts/fetch-wikipedia.ts",
+    "data:leads": "node --env-file-if-exists=.env scripts/fetch-leads.ts",
     "data:fonts": "node scripts/fetch-fonts.ts",
+    "data:publish": "node --env-file=.env scripts/publish-dataset.ts",
+    "db:seed": "node scripts/seed-db.ts",
+    "types": "wrangler types",
     "format": "biome check --write"
   },
   "dependencies": {
+    "@uwdata/flechette": "^2.5.0",
     "date-fns": "^4.4.0",
+    "fzstd": "^0.1.1",
     "maplibre-gl": "^6.11.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -25,14 +31,18 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@cloudflare/vite-plugin": "^1.62.3",
+    "@huggingface/hub": "^2.17.5",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "linkedom": "^0.18.13",
     "mapshaper": "^0.7.69",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "wrangler": "^4.145.0"
   }
 }

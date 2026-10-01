@@ -96,7 +96,7 @@ export function createMap(container: HTMLElement, onHover: (hovered: HoveredEven
           labeled: p.labeled,
           headline: p.headline,
         },
-        geometry: { type: 'Point', coordinates: [events.positions[p.index * 2], events.positions[p.index * 2 + 1]] },
+        geometry: { type: 'Point', coordinates: [events.lon[p.index], events.lat[p.index]] },
       })),
     })
     update({ drawn: lod })
@@ -116,7 +116,7 @@ export function createMap(container: HTMLElement, onHover: (hovered: HoveredEven
 
   // [Agent] The event panel covers the right edge on wide screens, so while it's open the camera pads that space out and the globe re-centres in what's left.
   const panelPadding = (open: boolean) => ({ top: 0, bottom: 0, left: 0, right: open && container.clientWidth > 900 ? PANEL_WIDTH : 0 })
-  const lngLatOf = (i: number): [number, number] => [events.positions[i * 2], events.positions[i * 2 + 1]]
+  const lngLatOf = (i: number): [number, number] => [events.lon[i], events.lat[i]]
 
   // [Agent] A newly opened event: if it's already in view beside the panel, only the padding eases. Otherwise the camera flies a high arc down to it, already padded for the panel, and a ripple marks the landing. The fly-to carries the padding itself, because two camera calls in a row cancel each other in MapLibre.
   function reveal(index: number) {

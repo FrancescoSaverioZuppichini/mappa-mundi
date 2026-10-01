@@ -1,4 +1,4 @@
-# [Agent] Cloudflare Pages response headers. Vite fingerprints everything in /assets, so it can be cached forever. Fonts never change under the same name. Data and geography keep their names across pipeline runs, so a day of caching lets a refresh reach visitors by tomorrow.
+# [Agent] Cloudflare Pages response headers. Vite fingerprints everything in /assets, so it can be cached forever. Fonts never change under the same name. Data and geography keep their names across pipeline runs, so a day of caching lets a refresh reach visitors by tomorrow. Wrangler has no type for .arrow, so it's given its registered one.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
@@ -7,6 +7,9 @@
 
 /data/*
   Cache-Control: public, max-age=86400
+
+/data/*.arrow
+  Content-Type: application/vnd.apache.arrow.file
 
 /geo/*
   Cache-Control: public, max-age=86400

@@ -25,6 +25,7 @@ Want to understand it by building it? **[TUTORIAL.md](TUTORIAL.md)** rebuilds a 
 - [Architecture](#architecture)
 - [Data sources](#data-sources)
 - [Deploy](#deploy)
+- [Dataset](#dataset)
 
 ---
 
@@ -93,12 +94,14 @@ Every constant below is the one in the code, and each part names the file it des
 
 ```
 Wikidata (via QLever) ──fetch-events.ts──►  data/history.sqlite  ◄──fetch-wikipedia.ts── English Wikipedia API
-                                                  │   events: facts about each event
-                                                  │   articles: in-degree + coordinates per article
+                                                  │   events: facts about each event   ◄──fetch-leads.ts───┘
+                                                  │   articles: in-degree, coordinates, description, thumbnail
+                                                  │   leads: each article's lead section
                                                   ▼
                                           export-events.ts  (every decision is made here)
                                                   ▼
-                              public/data/events.bin + events-meta.json   →  the browser
+                  public/data/events.arrow  ──►  the browser, and Hugging Face
+                  data/release/leads.arrow  ──►  Hugging Face, and D1 (seed-db.ts) ──► /api/leads
 ```
 
 The rule that keeps the pipeline simple: **the fetch scripts only record facts, and the export makes every decision.** Changing how positions are chosen or how importance is scored means re-running the export, a few seconds of work, not the network passes.
@@ -106,12 +109,15 @@ The rule that keeps the pipeline simple: **the fetch scripts only record facts, 
 | Step | Command | What it does | Time |
 |---|---|---|---|
 | Wikidata facts | `npm run data:events` | classes → events, dates, position candidates (resumable; `--refresh` rebuilds) | ~10 min |
-| Wikipedia facts | `npm run data:wikipedia` | in-degree + article coordinates per article (cached per article) | ~15 min |
-| Decisions | `npm run data:export` | filter, position, score, sort, write binary | seconds |
+| Wikipedia facts | `npm run data:wikipedia` | in-degree, coordinates, description and thumbnail per article (cached per article) | ~15 min |
+| Wikipedia leads | `npm run data:leads` | each article's lead section, cleaned to text, bold, italics and links (cached per article) | ~5 h at the API's 200 requests/min |
+| Decisions | `npm run data:export` | filter, position, score, sort, write the two Feather files | ~1 min |
 | Geography | `npm run data:geo` | borders, land, rivers, decorations → `public/geo` | ~20 s |
 | Fonts | `npm run data:fonts` | every UI and map-label font → `public/fonts`, so nothing loads from a font CDN | seconds |
 
-`npm run data` runs all five in order.
+`npm run data` runs all six in order. Then `npm run data:publish` uploads the dataset to Hugging Face, and `npm run db:seed -- --remote` loads the leads into D1 (see [Dataset](#dataset) and [Deploy](#deploy)).
+
+The two Wikipedia steps read `WIKIMEDIA_TOKEN` from `.env` if it's there: an owner-only OAuth 2 token from meta.wikimedia.org, which makes requests count against your account's rate limit instead of the anonymous one.
 
 #### Which events
 
@@ -199,22 +205,17 @@ The panel shows the **raw** in-degree ("574 articles link here"). Only ranking u
 
 #### The shipped files
 
-Rows are sorted by score, most important first. The app relies on that order everywhere: walking from the top ranks events almost without sorting (see [What matters in a moment](#what-matters-in-a-moment)).
+Two Feather files (Arrow IPC, ZSTD-compressed, one record batch), joined on `qid`, same rows in the same order: sorted by score, most important first. The app relies on that order everywhere: walking from the top ranks events almost without sorting (see [What matters in a moment](#what-matters-in-a-moment)).
 
-`events.bin` is binary. Every `f32` column starts 4-byte aligned, so `src/hooks/useHistory.ts` wraps each one as a typed-array view with no copy.
+**`public/data/events.arrow`** (1.7MB) is what the app loads, whole, at boot:
 
 ```
-u32 count
-f32 [lon, lat] × count
-f32 start      × count
-f32 end        × count
-f32 score      × count
-f32 inlinks    × count
-f32 sitelinks  × count
-u8  category   × count
+qid · label · article · category · start · end · lon · lat · position_source · score · inlinks · sitelinks
 ```
 
-`events-meta.json` holds the strings: `{ qid[], label[], article[] }`. An article title equal to the label (with underscores) ships as `""`, which makes the file about a third smaller.
+`src/hooks/useHistory.ts` reads it with [flechette](https://github.com/uwdata/flechette): `tableFromIPC` unzips each column once and hands numeric columns back as typed arrays over those bytes, so nothing is parsed. Only the strings are decoded. `category` is stored by name and mapped to `CATEGORIES` indices at load. How the zero-copy part works is in [docs/zero-copy.md](docs/zero-copy.md).
+
+**`data/release/leads.arrow`** (not shipped) is the Wikipedia text: `qid · description · extract · lead_html · thumbnail · fetched_at`. `lead_html` keeps only `<p>`, `<b>`, `<i>` and `<a href="/wiki/…">`, so the panel can turn a link to one of our events into an in-app link. `extract` is the same text without tags. `scripts/seed-db.ts` loads it into D1, and the Worker serves one row per opened event.
 
 #### Geography
 
@@ -380,12 +381,12 @@ A real thread from the current data: **Battle of Cape Esperance** (1942, Solomon
 
 ## Architecture
 
-Two halves that meet at two files in `public/`: an offline **data pipeline** (`scripts/`) and the **app** (`src/`).
+Three parts: an offline **data pipeline** (`scripts/`), the **app** (`src/`), and one small **Worker** (`worker/`) for the only thing static files can't do.
 
 ```
-scripts/  Node, offline         ──►  public/data/events.bin + events-meta.json   ──►  src/  browser
-          Wikidata · Wikipedia       public/geo/*                                      MapLibre · React
-          → data/history.sqlite
+scripts/  Node, offline         ──►  public/data/events.arrow, public/geo/*  ──►  src/  browser
+          Wikidata · Wikipedia       data/release/leads.arrow ──► D1          ──►  worker/  /api/leads/:qid
+          → data/history.sqlite      both .arrow files ──► Hugging Face             MapLibre · React
 ```
 
 ### Every file and what it's responsible for
@@ -393,12 +394,20 @@ scripts/  Node, offline         ──►  public/data/events.bin + events-meta.
 Each file opens with the same line (`// [Agent] Responsibility: …`), and this tree is those lines, shortened.
 
 ```
-scripts/                       the offline pipeline (Node 24, no dependencies)
+scripts/                       the offline pipeline (Node 24)
 ├─ fetch-events.ts             Wikidata facts → data/history.sqlite: dates, sitelinks, position candidates. Decides nothing.
-├─ fetch-wikipedia.ts          Wikipedia facts → data/history.sqlite: each article's in-degree and coordinates, cached per article
-├─ export-events.ts            every decision: facts → public/data/events.bin + events-meta.json (what ships, where, how important)
+├─ fetch-wikipedia.ts          Wikipedia facts → data/history.sqlite: each article's in-degree, coordinates, description and thumbnail
+├─ fetch-leads.ts              Wikipedia leads → data/history.sqlite: each article's lead section, cleaned, cached per article
+├─ wikipedia.ts                talking to the Wikipedia API: one polite request, a worker pool, title mapping
+├─ export-events.ts            every decision: facts → events.arrow + leads.arrow (what ships, where, how important)
+├─ publish-dataset.ts          the dataset → Hugging Face, one commit
+├─ seed-db.ts                  leads.arrow → D1, through one SQL file wrangler runs
+├─ consts.ts                   what the scripts must agree on: User-Agent, the in-link floor, file paths, the ZSTD codec
 ├─ fetch-geo.ts                geography → public/geo: land, sea, lakes, rivers, border snapshots, decoration
 └─ fetch-fonts.ts              every font, once → public/fonts (UI woff2 + ui.css, map-label TTFs), so no font CDN at runtime
+
+worker/
+└─ index.ts                    GET /api/leads/:qid → one row from D1, edge-cached
 
 src/
 ├─ main.tsx                    boot: fonts + the app together, or an error on the page if the data fails
@@ -419,7 +428,7 @@ src/
     ├─ Header.tsx              era and years, span buttons, Detail and counts, the toolbar
     ├─ Search.tsx              find an event by name and open it (/ or ⌘K)
     ├─ CategoryMenu.tsx        switch categories on and off, with counts for the window
-    ├─ EventPanel.tsx          the open event: summary, rank in the span, related events, what happened next, the thread
+    ├─ EventPanel.tsx          the open event: lead, rank in the span, related events, what happened next, the thread
     ├─ Surprise.tsx            open a random notable event not seen yet (button or R)
     ├─ Tour.tsx                the first-visit tour: steps that spotlight the real UI and act out what they say
     ├─ icons.tsx               the line icons
@@ -454,14 +463,15 @@ src/
 
 ## Data sources
 
-Everything the app shows comes from somewhere else. There are two kinds of use: **fetched once** by the pipeline (`scripts/`), with the results committed in `public/`, and **fetched live** by the browser on every visit.
+Everything the app shows comes from somewhere else. There are two kinds of use: **fetched once** by the pipeline (`scripts/`), with the results committed in `public/` or loaded into D1, and **fetched live** by the browser on every visit.
 
 ### Fetched once, by the pipeline
 
 | Source | What we use it for | How | License |
 |---|---|---|---|
 | [Wikidata](https://www.wikidata.org) | the events: classes, dates, coordinates, locations, "part of" links, sitelink counts | SPARQL through the public [QLever](https://qlever.dev) endpoint (`fetch-events.ts`), plus the entity API `wbgetclaims` for the order of listed locations | CC0 |
-| [English Wikipedia](https://en.wikipedia.org) | each article's in-degree (incoming links) and its `{{coord}}` coordinates | Action API, `prop=cirrusdoc\|coordinates` (`fetch-wikipedia.ts`) | the numbers are facts; article text is CC BY-SA 4.0, and none of it is stored |
+| [English Wikipedia](https://en.wikipedia.org) | each article's in-degree (incoming links), `{{coord}}` coordinates, short description and lead image | Action API, `prop=cirrusdoc\|coordinates\|description\|pageimages`, 50 titles a call (`fetch-wikipedia.ts`) | the numbers are facts; descriptions are CC BY-SA 4.0 |
+| [English Wikipedia](https://en.wikipedia.org) | each article's lead section, with its links | Action API, `action=parse`, section 0, one call per article (`fetch-leads.ts`) | CC BY-SA 4.0, credited and linked back through "Read on Wikipedia". Only text, bold, italics and links are kept |
 | [historical-basemaps](https://github.com/aourednik/historical-basemaps) by André Ourednik | the 48 historical border snapshots | raw GeoJSON from GitHub, simplified with mapshaper (`fetch-geo.ts`) → `public/geo/borders/` | GPL-3.0: the processed files in `public/geo/borders/` are a derivative and stay under it |
 | [Natural Earth](https://www.naturalearthdata.com) 1:50m | land, ocean, lakes and rivers | GeoJSON from [natural-earth-vector](https://github.com/nvkelso/natural-earth-vector) (`fetch-geo.ts`) → `public/geo/` | public domain |
 | Fonts via [fontsource](https://fontsource.org): Inter, Source Serif 4, Cinzel, Almendra, IM Fell English, Playfair Display, Noto Serif | all UI and map-label typography | woff2 and TTF from fontsource's CDN (`fetch-fonts.ts`) → `public/fonts/` | SIL Open Font License 1.1; each family's license ships in `public/fonts/licenses/` |
@@ -472,8 +482,8 @@ The graticule and portolan rhumb lines in `public/geo/` are generated by `fetch-
 
 | Source | What for | License / credit |
 |---|---|---|
-| [Wikipedia Action API](https://www.mediawiki.org/wiki/API:Parse) `action=parse`, lead section | the event panel's text, with its links: a link to one of our events opens it in the app, any other opens Wikipedia | CC BY-SA 4.0, linked back through "Read on Wikipedia". Only text, bold, italics and links are kept, rebuilt as React elements, never injected as HTML |
-| [Wikipedia REST API](https://en.wikipedia.org/api/rest_v1/) `page/summary` | the panel's thumbnail, and plain-text fallback while the lead loads | text CC BY-SA 4.0; thumbnails come from Wikimedia Commons, each under its own license (see the image's Commons page) |
+| our Worker, `/api/leads/:qid` (D1) | the event panel's text, with its links: a link to one of our events opens it in the app, any other opens Wikipedia | the Wikipedia leads from the pipeline, CC BY-SA 4.0. Rebuilt as React elements, never injected as HTML |
+| [Wikimedia Commons](https://commons.wikimedia.org) | the panel's thumbnail, loaded straight from Wikimedia's CDN | each image under its own license (see the image's Commons page) |
 | [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen Terrarium, AWS Open Data) | the hillshaded relief of the older eras | free with attribution; credited on the map as "Terrain: Mapzen / AWS" |
 | [NASA GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) Blue Marble Shaded Relief & Bathymetry | the modern era's satellite imagery | NASA imagery, no copyright; credited on the map as "NASA Blue Marble" |
 | [MapLibre demo glyphs](https://demotiles.maplibre.org) | fallback only: map characters outside the bundled latin fonts | free to use |
@@ -482,6 +492,19 @@ The map's attribution control (bottom right) credits Natural Earth, historical-b
 
 ## Deploy
 
-It's a static site: `npm run build` writes `dist/`, and everything it needs is committed in `public/`, so the host never runs the data pipeline. On Cloudflare it's an assets-only Worker (`wrangler.jsonc`): connect the repo under Workers & Pages → Create → Import a repository, and keep the defaults, build command `npm run build` and deploy command `npx wrangler deploy`.
+Static files plus one Worker, on Cloudflare (`wrangler.jsonc`). `npm run build` writes `dist/` with the [Cloudflare Vite plugin](https://developers.cloudflare.com/workers/vite-plugin/): the site, and the Worker beside it. Everything the site needs is committed in `public/`, so the host never runs the data pipeline. Static files never run the Worker; only `/api/*` does (`run_worker_first`).
 
-Node comes from `.node-version` (24), and `public/_headers` sets the caching: fingerprinted `/assets` forever, fonts for a year, data and geography for a day. State lives in the URL hash, so there are no routes to rewrite. Every push to `main` deploys.
+Connect the repo under Workers & Pages → Create → Import a repository, and keep the defaults: build command `npm run build`, deploy command `npx wrangler deploy`. Every push to `main` deploys.
+
+**D1.** The leads live in a D1 database, `mappa-mundi`, bound as `DB`. Create it once with `npx wrangler d1 create mappa-mundi` and put its id in `wrangler.jsonc`. Then `npm run db:seed -- --remote` fills it from `data/release/leads.arrow`, and re-running it after an export rebuilds the table. `npm run db:seed` without the flag fills the local D1 that `npm run dev` uses.
+
+Node comes from `.node-version` (24), and `public/_headers` sets the caching: fingerprinted `/assets` forever, fonts for a year, data and geography for a day. State lives in the URL hash, so there are no routes to rewrite.
+
+## Dataset
+
+The data is published on Hugging Face as **[Francesco/mappa-mundi-events](https://huggingface.co/datasets/Francesco/mappa-mundi-events)**: `events.arrow` (the same file the app ships) and `leads.arrow`, with a dataset card describing every column. `npm run data:publish` uploads both in one commit; `npm run data:publish -- README.md` uploads just the named files. It reads `HF_TOKEN` from `.env`.
+
+```python
+import pandas as pd
+events = pd.read_feather("hf://datasets/Francesco/mappa-mundi-events/events.arrow")
+```

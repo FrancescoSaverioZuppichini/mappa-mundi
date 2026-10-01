@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   // The project's style, so editors format to it instead of to Biome's defaults.
-  "files": { "includes": ["src/**", "scripts/**", "*.ts", "*.json", "*.jsonc", "!public", "!dist", "!data"] },
+  "files": { "includes": ["src/**", "scripts/**", "worker/**", "*.ts", "!worker-configuration.d.ts", "*.json", "*.jsonc", "!public", "!dist", "!data"] },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 200 },
   "javascript": {
     "formatter": { "quoteStyle": "single", "jsxQuoteStyle": "double", "semicolons": "asNeeded", "arrowParentheses": "asNeeded", "trailingCommas": "all" }

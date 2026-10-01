@@ -4,7 +4,7 @@ Hello There!! Today we'll build an interactive atlas of five thousand years of h
 
 It's the **mini version of Mappa Mundi**, the app in this repo. It has the same structure and the same ideas, with fewer features. We build it bottom up:
 
-1. **the data:** a pipeline that pulls events from Wikidata, measures their importance on Wikipedia, and packs everything into a 0.6 MB binary file;
+1. **the data:** a pipeline that pulls events from Wikidata, measures their importance on Wikipedia, and packs everything into one Feather file of columns the browser reads without parsing;
 2. **the logic:** time, ranking and the rules of the state, all pure functions you can run in the terminal;
 3. **the store:** one state, one way to change it;
 4. **what you see:** a MapLibre globe that decides what fits on screen, a canvas timeline, and a thin React UI.
@@ -19,7 +19,7 @@ Let's get started!
 1. [Setup](#1-setup)
 2. [What is an event? Wikidata](#2-what-is-an-event-wikidata)
 3. [How important is it? In-degree](#3-how-important-is-it-in-degree)
-4. [Decisions: score, position, one binary file](#4-decisions-score-position-one-binary-file)
+4. [Decisions: score, position, one Feather file](#4-decisions-score-position-one-feather-file)
 5. [The pure logic: time and ranking](#5-the-pure-logic-time-and-ranking)
 6. [The store: one state, one writer](#6-the-store-one-state-one-writer)
 7. [The globe](#7-the-globe)
@@ -42,7 +42,7 @@ Two halves, which meet at two files:
  Wikipedia ─► fetch-wikipedia.ts ─┘          │
                                      export-events.ts
                                              ▼
-                        public/data/events.bin + events-meta.json ──► the app
+                                 public/data/events.arrow ──► the app
 ```
 
 **The pipeline rule: fetch scripts record facts, the export makes decisions.**
@@ -71,7 +71,7 @@ The folders follow that split:
 src/
 ├─ main.tsx  index.css  types.ts  consts.ts
 ├─ hooks/useHistory.ts     the store: state + update(), and the Play loop
-├─ lib/                    pure functions: time, rank, history (the rules), events (the file format), categories, epochs
+├─ lib/                    pure functions: time, rank, history (the rules), events (reads the file), categories, epochs
 └─ components/
     ├─ App.tsx  Header.tsx  EventPanel.tsx  Surprise.tsx
     ├─ globe/              Globe.tsx + map.ts (MapLibre) + placement.ts (what fits on screen)
@@ -83,7 +83,7 @@ scripts/                   the pipeline, plus two terminal checkpoints
 
 ## 1. Setup
 
-You need **Node 24**: it has SQLite built in (`node:sqlite`), and it runs `.ts` files directly by stripping the types. So the pipeline needs no dependencies and no build step.
+You need **Node 24**: it has SQLite built in (`node:sqlite`), and it runs `.ts` files directly by stripping the types. So the pipeline needs no build step, and only one dependency, which we add in §4.
 
 ```bash
 mkdir mini-atlas && cd mini-atlas
@@ -517,7 +517,7 @@ console.log('✓ done')
 
 ---
 
-## 4. Decisions: score, position, one binary file
+## 4. Decisions: score, position, one Feather file
 
 ### 4.1 The score, and the template trap
 
@@ -541,39 +541,53 @@ The category weight fixes another bias. London's 178,620 links are about modern 
 
 ### 4.2 The file
 
-For each event the browser needs a position, a start, an end, a score, an in-degree, a category and two strings. JSON objects would be slow to parse and create 23,000 objects nobody needs. So we write **columns** into one `ArrayBuffer`, and the browser wraps each column as a typed-array view, with no parsing and no copying:
+For each event the browser needs a position, a start, an end, a score, an in-degree, a category and three strings. JSON objects would be slow to parse and create 23,000 objects nobody needs. So we store **columns**: all the starts together, then all the ends, all the longitudes, and so on, each one written exactly as a `Float32Array` sits in memory. The browser then never parses a number. It points a typed-array view at each column's bytes: **reading is pointing, not parsing.**
+
+That is what **Feather** is: Apache Arrow's IPC format, written as a file. Every column is one block of raw, aligned bytes, and a footer records where each block starts:
 
 ```
-byte 0        u32 count n
-byte 4        f32 × 2n   positions: lon0 lat0 lon1 lat1 …    new Float32Array(buffer, 4, n * 2)
-4 + n*8       f32 × n    start                                new Float32Array(buffer, 4 + n * 8, n)
-4 + n*12      f32 × n    end
-4 + n*16      f32 × n    score
-4 + n*20      f32 × n    inlinks
-4 + n*24      u8  × n    category                             new Uint8Array(buffer, 4 + n * 24, n)
+public/data/events.arrow
+  ARROW1         magic bytes
+  schema         qid · label · article: utf8   category: dictionary   start · end · lon · lat · score · inlinks: float32
+  dictionary     battle · war · politics · disaster · founding
+  record batch   every column's raw bytes, each block starting on a multiple of 8
+                 … │ start f32 × n │ end f32 × n │ lon f32 × n │ lat f32 × n │ score f32 × n │ inlinks f32 × n │
+  footer         where every block starts
+  ARROW1
 ```
 
-- **Alignment.** A `Float32Array` must start on a multiple of 4 bytes: the header is 4 bytes and every float column is 4n bytes long. The one-byte column goes last.
-- **f32 is enough.** It stores coordinates to about a metre and every year exactly. f64 would double the file for nothing.
-- **Strings** go to a small JSON file next to it.
+- **Reading is pointing.** `tableFromIPC` reads the footer, learns "`lon` is float32 and starts at byte X", and hands back `new Float32Array(bytes.buffer, X, n)`. No number is decoded and nothing is copied.
+- **Alignment is the format's job.** A `Float32Array` must start on a multiple of 4 bytes, and Feather pads every block to 8, so we never count offsets by hand.
+- **f32 is enough.** It stores coordinates to about a metre and every year exactly. f64 would double the numbers for nothing.
+- **Strings** are UTF-8 bytes plus offsets, and they're the only real decoding work: a JS string can't be a view.
+- **`category` is dictionary-encoded.** The five names are stored once and each row costs one byte, so the file says "battle" to pandas or DuckDB, and the app maps names back to `CATEGORIES` indices when it loads.
 - **The key decision: rows are sorted by score, most important first.** Row 0 is the most important event in history, and every algorithm below walks from the top.
+
+We keep the file uncompressed so the views point straight into the fetched bytes; the full app adds ZSTD, which makes it about 3× smaller at the price of unzipping each column once. The same trick hand-rolled, with its traps, is in [docs/zero-copy.md](docs/zero-copy.md).
+
+Feather needs one library, [flechette](https://github.com/uwdata/flechette), a small Arrow implementation in JavaScript. The browser uses it too, so it's a regular dependency:
+
+```bash
+npm install @uwdata/flechette
+```
 
 ```ts
 // scripts/export-events.ts
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { dictionary, int8, tableFromArrays, tableToIPC, utf8 } from '@uwdata/flechette'
 import { CATEGORIES } from '../src/lib/categories.ts'
 
 const MIN_INLINKS = 10
 const TEMPLATE_CAP = 60
 
 type Row = {
-  label: string; article: string; category: number; year: number; year_end: number; sitelinks: number; inlinks: number
+  qid: string; label: string; article: string; category: number; year: number; year_end: number; sitelinks: number; inlinks: number
   own_lon: number | null; own_lat: number | null; article_lon: number | null; article_lat: number | null
   parts: number; parts_lon: number | null; parts_lat: number | null; loc_lon: number | null; loc_lat: number | null
 }
 
-// The first position that exists wins.
+// [Agent] The first position that exists wins.
 function position(r: Row): [number, number] | null {
   if (r.own_lon !== null && r.own_lat !== null) return [r.own_lon, r.own_lat]
   if (r.article_lon !== null && r.article_lat !== null) return [r.article_lon, r.article_lat]
@@ -595,35 +609,38 @@ const events = rows
   })
   .sort((a, b) => b.score - a.score)
 
-// Layout: u32 count, then f32 columns [lon,lat]×n, start×n, end×n, score×n, inlinks×n, then u8 category×n.
-const n = events.length
-const buffer = new ArrayBuffer(4 + n * 24 + n)
-new Uint32Array(buffer, 0, 1)[0] = n
-const positions = new Float32Array(buffer, 4, n * 2)
-const start = new Float32Array(buffer, 4 + n * 8, n)
-const end = new Float32Array(buffer, 4 + n * 12, n)
-const score = new Float32Array(buffer, 4 + n * 16, n)
-const inlinks = new Float32Array(buffer, 4 + n * 20, n)
-const category = new Uint8Array(buffer, 4 + n * 24, n)
-events.forEach((e, i) => {
-  positions[i * 2] = e.lon
-  positions[i * 2 + 1] = e.lat
-  start[i] = e.year
-  end[i] = e.year_end
-  score[i] = e.score
-  inlinks[i] = e.inlinks
-  category[i] = e.category
-})
+// [Agent] One array per column, all in the same row order. A Float32Array becomes a float32 column as it is, so the
+// browser gets the very same bytes back. Plain arrays need a type: strings are utf8, and category goes in by name
+// as a dictionary, so the file reads "battle" anywhere while each row still costs one byte.
+const table = tableFromArrays(
+  {
+    qid: events.map(e => e.qid),
+    label: events.map(e => e.label),
+    article: events.map(e => e.article),
+    category: events.map(e => CATEGORIES[e.category].name),
+    start: Float32Array.from(events, e => e.year),
+    end: Float32Array.from(events, e => e.year_end),
+    lon: Float32Array.from(events, e => e.lon),
+    lat: Float32Array.from(events, e => e.lat),
+    score: Float32Array.from(events, e => e.score),
+    inlinks: Float32Array.from(events, e => e.inlinks),
+  },
+  { types: { qid: utf8(), label: utf8(), article: utf8(), category: dictionary(utf8(), int8()) } },
+)
 
+// [Agent] format 'file' is Feather: the columns plus the footer that says where each one starts. No codec, so the
+// bytes on disk are exactly the bytes the browser will view. It returns null only when given a sink, hence the `!`.
+const bytes = tableToIPC(table, { format: 'file' })!
 mkdirSync('public/data', { recursive: true })
-writeFileSync('public/data/events.bin', new Uint8Array(buffer))
-writeFileSync('public/data/events-meta.json', JSON.stringify({ label: events.map(e => e.label), article: events.map(e => e.article) }))
-console.log(`✓ ${n} events, ${(buffer.byteLength / 1e6).toFixed(1)} MB. Top: ${events.slice(0, 5).map(e => e.label).join(' · ')}`)
+writeFileSync('public/data/events.arrow', bytes)
+console.log(`✓ ${events.length} events, ${(bytes.byteLength / 1e6).toFixed(1)} MB. Top: ${events.slice(0, 5).map(e => e.label).join(' · ')}`)
 ```
 
 ```
-✓ 22778 events, 0.6 MB. Top: World War II · World War I · American Civil War · Bangladesh Liberation War · New York City
+✓ 22778 events, 1.8 MB. Top: World War II · World War I · American Civil War · Bangladesh Liberation War · New York City
 ```
+
+The six number columns are 0.55 MB of that, and the three string columns are most of the rest. A server that sends it with brotli gets it down to 0.59 MB, and the browser undoes that before `arrayBuffer()` hands over the bytes, so the views still point at plain columns.
 
 The whole pipeline took 9 minutes, most of it the Wikipedia step. `npm run data` runs all three scripts.
 
@@ -637,14 +654,16 @@ The whole pipeline took 9 minutes, most of it the Wikipedia step. `npm run data`
 // src/types.ts
 export type EventsData = {
   count: number
-  positions: Float32Array
-  start: Float32Array
-  end: Float32Array
-  score: Float32Array
-  inlinks: Float32Array
-  category: Uint8Array
+  qid: string[]
   label: string[]
   article: string[]
+  category: Uint8Array
+  start: Float32Array
+  end: Float32Array
+  lon: Float32Array
+  lat: Float32Array
+  score: Float32Array
+  inlinks: Float32Array
 }
 
 export type TimeWindow = [start: number, end: number]
@@ -752,25 +771,31 @@ export function formatYear(year: number) {
 }
 ```
 
-The file format is a pure function too, so the terminal scripts can read it. It's the mirror of the export:
+Reading the file is a pure function too, so the terminal scripts and the browser share it. Node's `readFileSync` gives a `Buffer`, which is a `Uint8Array`, and `fetch` gives an `ArrayBuffer`: `tableFromIPC` takes either.
 
 ```ts
 // src/lib/events.ts
+import { tableFromIPC } from '@uwdata/flechette'
 import type { EventsData } from '../types.ts'
+import { CATEGORIES } from './categories.ts'
 
-// Views into one buffer, no copying: the offsets mirror the layout written by export-events.ts.
-export function parseEvents(buffer: ArrayBuffer, meta: { label: string[]; article: string[] }): EventsData {
-  const n = new Uint32Array(buffer, 0, 1)[0]
+// [Agent] tableFromIPC reads the footer and hands every number column back as a Float32Array over the file's own
+// bytes, so nothing is parsed or copied. Only the strings are decoded. The columns come back untyped, and the cast
+// trusts export-events.ts to have written what EventsData says.
+export function parseEvents(bytes: ArrayBuffer | Uint8Array): EventsData {
+  const table = tableFromIPC(bytes)
+  const { category, ...columns } = table.toColumns()
   return {
-    count: n,
-    positions: new Float32Array(buffer, 4, n * 2),
-    start: new Float32Array(buffer, 4 + n * 8, n),
-    end: new Float32Array(buffer, 4 + n * 12, n),
-    score: new Float32Array(buffer, 4 + n * 16, n),
-    inlinks: new Float32Array(buffer, 4 + n * 20, n),
-    category: new Uint8Array(buffer, 4 + n * 24, n),
-    ...meta,
-  }
+    ...columns,
+    count: table.numRows,
+    // [Agent] The file names categories and the app indexes CATEGORIES. A name we don't know means the file and the
+    // code disagree, and that has to fail here instead of quietly drawing it as a battle.
+    category: Uint8Array.from(category, (name: string) => {
+      const id = CATEGORIES.findIndex(c => c.name === name)
+      if (id < 0) throw new Error(`events.arrow has an unknown category: ${name}`)
+      return id
+    }),
+  } as EventsData
 }
 ```
 
@@ -846,9 +871,7 @@ import { rank, shareOf } from '../src/lib/rank.ts'
 import { formatYear, windowOf } from '../src/lib/time.ts'
 
 const [year = '1066', span = '100'] = process.argv.slice(2)
-const file = readFileSync('public/data/events.bin')
-const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength)
-const events = parseEvents(buffer, JSON.parse(readFileSync('public/data/events-meta.json', 'utf8')))
+const events = parseEvents(readFileSync('public/data/events.arrow'))
 
 const timeWindow = windowOf({ year: Number(year), span: Number(span) })
 const ranked = rank(events, timeWindow)
@@ -857,7 +880,7 @@ for (const i of ranked.slice(0, 8))
   console.log(`  ${formatYear(events.start[i]).padEnd(8)} ${events.label[i].slice(0, 36).padEnd(37)} score ${String(Math.round(events.score[i])).padStart(6)} × share ${shareOf(events, i, timeWindow).toFixed(2)}`)
 ```
 
-The `buffer.slice` line is there because a Node `Buffer` can be a view into a bigger shared `ArrayBuffer`, and `parseEvents` reads offsets from the start.
+The `Buffer` goes in as it is. A small one can be a slice of a bigger shared pool, the [classic trap](docs/zero-copy.md#the-node-buffer-trap) of hand-made formats, but flechette reads from its `byteOffset`, so there's nothing to slice.
 
 ```
 $ node scripts/explore.ts 1066 100
@@ -954,8 +977,7 @@ import { parseEvents } from '../src/lib/events.ts'
 import { apply } from '../src/lib/history.ts'
 import type { HistoryState } from '../src/types.ts'
 
-const file = readFileSync('public/data/events.bin')
-const events = parseEvents(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength), JSON.parse(readFileSync('public/data/events-meta.json', 'utf8')))
+const events = parseEvents(readFileSync('public/data/events.arrow'))
 const show = (step: string, s: HistoryState) => console.log(step.padEnd(34), JSON.stringify({ time: s.time, selected: s.selected === null ? null : events.label[s.selected], play: s.play.on }))
 
 const hastings = events.label.indexOf('Battle of Hastings')
@@ -990,7 +1012,7 @@ open Hastings while playing        {"time":{"year":1066,"span":100},"selected":"
 
 That's also why the state lives outside React at all. Dragging the timeline changes `time` on every frame. In a `useState` provider, every component would re-render each frame. Here only the ones reading `time` do, and the map and the canvas never re-render React.
 
-The data loads here with a top-level `await`, so nothing renders before it's ready.
+The data loads here with a top-level `await`, so nothing renders before it's ready. It's one `fetch` and one `parseEvents`: the browser hands over the file's bytes, and the columns are views over them.
 
 Play is the one thing that runs by itself:
 
@@ -1009,11 +1031,11 @@ import { windowOf } from '../lib/time.ts'
 import type { HistoryStore } from '../types.ts'
 
 async function loadEvents() {
-  const [buffer, meta] = await Promise.all([
-    fetch('/data/events.bin').then(r => r.arrayBuffer()),
-    fetch('/data/events-meta.json').then(r => r.json()),
-  ])
-  return parseEvents(buffer, meta)
+  const res = await fetch('/data/events.arrow')
+  // [Agent] In dev a missing file isn't a 404: Vite answers with index.html, and Arrow would choke on that with
+  // "Expected to read 1868833084 metadata bytes". Say what's actually wrong.
+  if (!res.ok || res.headers.get('content-type')?.includes('html')) throw new Error('No public/data/events.arrow: run npm run data')
+  return parseEvents(await res.arrayBuffer())
 }
 
 export const events = await loadEvents()
@@ -1128,7 +1150,7 @@ export function placeEvents(events: EventsData, viewport: Viewport, ranked: numb
   // 2. Order: the open event first, then events already on screen, then newcomers, each group in rank order.
   const candidates: { i: number; x: number; y: number; percentile: number; order: number }[] = []
   const consider = (i: number, rank: number) => {
-    const at = viewport.locate(events.positions[i * 2], events.positions[i * 2 + 1])
+    const at = viewport.locate(events.lon[i], events.lat[i])
     if (at) candidates.push({ i, ...at, percentile: 1 - rank / population, order: i === pinned ? -1 : previous.has(i) ? rank : rank + population })
   }
   for (let rank = 0; rank < pool; rank++) consider(ranked[rank], rank)
@@ -1300,7 +1322,7 @@ export function createMap(container: HTMLElement) {
       type: 'FeatureCollection',
       features: placed.map(p => ({
         type: 'Feature',
-        geometry: { type: 'Point', coordinates: [events.positions[p.index * 2], events.positions[p.index * 2 + 1]] },
+        geometry: { type: 'Point', coordinates: [events.lon[p.index], events.lat[p.index]] },
         properties: {
           index: p.index,
           radius: p.radius,
@@ -1324,7 +1346,7 @@ export function createMap(container: HTMLElement) {
   }
 
   // The camera isn't state: it follows `selected`. Fly to a newly opened event unless it's already on screen; glide while playing.
-  const lngLat = (i: number): [number, number] => [events.positions[i * 2], events.positions[i * 2 + 1]]
+  const lngLat = (i: number): [number, number] => [events.lon[i], events.lat[i]]
   function reveal(i: number) {
     if (!viewport().locate(...lngLat(i))) map.flyTo({ center: lngLat(i), zoom: Math.max(map.getZoom(), 3), duration: 1600 })
   }
@@ -1805,7 +1827,7 @@ You should see "1700 – 1800", a cream Age of Sail globe with the borders of 17
 |---|---|
 | A black screen, "0 events" | the map has no height: the wrapper div in `Globe.tsx` |
 | The globe, but no borders | GitHub's raw file server is blocked on your network |
-| `Unexpected token '<'` | `public/data/` is empty: run `npm run data` |
+| `No public/data/events.arrow` | the export hasn't run: `npm run data` |
 | `QLever 429` | QLever is busy: wait a minute and run it again |
 
 ---
@@ -1819,7 +1841,7 @@ Every file here has a bigger sibling in this repo:
 | 10 categories and a category filter (`view.hidden`) | `src/lib/categories.ts`, `src/components/CategoryMenu.tsx` |
 | The story thread: a reaction that hops along "what happened next" | `src/lib/story.ts`, `src/hooks/useHistory.ts` |
 | Shareable URLs (`#1942,500y,Q362`), the tour, search | `src/hooks/useHistory.ts`, `src/components/*` |
-| The panel's text with working links: the lead comes from the parse API, and a link to one of our events opens it in the app | `src/components/EventPanel.tsx` |
+| The panel's text with working links: a link to one of our events opens it in the app | `src/components/EventPanel.tsx` |
 | First-listed locations from Wikidata's entity API | `scripts/fetch-events.ts` |
 | Simplified borders with their own labels and colours | `scripts/fetch-geo.ts`, `src/components/globe/borders.ts` |
 | Each era as a different kind of map: papyrus, portolan, engraving, satellite | `src/lib/epochs.ts`, `src/components/globe/style.ts`, `textures.ts` |
@@ -1827,5 +1849,12 @@ Every file here has a bigger sibling in this repo:
 | A flat map mode, era tabs, a hover preview on the timeline, hover rings, the landing ripple | `src/components/globe/*`, `src/components/timeline/canvas.ts` |
 
 Each one is a variation on something you've built: a fact in the pipeline, a pure function in `lib/`, a field and a rule in the store, or a layer in the map.
+
+The data path grows around the same Feather file:
+
+- **Wikipedia leads.** `scripts/fetch-leads.ts` fetches each article's lead section with `action=parse`, the only API that keeps the links, and cleans it down to paragraphs, bold, italics and `/wiki/` links. The export writes them to a second Feather file, `leads.arrow`, in the same row order. See [The shipped files](README.md#the-shipped-files).
+- **D1 and a Worker.** The app never downloads all the leads. `scripts/seed-db.ts` loads them into a Cloudflare D1 database, and `worker/index.ts` serves one per opened event at `/api/leads/:qid`. See [Deploy](README.md#deploy).
+- **ZSTD.** Both files are compressed: `events.arrow` drops from 5 MB to 1.7 MB, and the app unzips each column once before viewing it. See [docs/zero-copy.md](docs/zero-copy.md#compression-breaks-it).
+- **A public dataset.** The very `events.arrow` the app serves, and `leads.arrow`, are on Hugging Face as [Francesco/mappa-mundi-events](https://huggingface.co/datasets/Francesco/mappa-mundi-events), so `pd.read_feather` opens them. See [Dataset](README.md#dataset).
 
 Thank you for reading!

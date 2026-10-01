@@ -11,17 +11,12 @@ const SAME_CATEGORY_BONUS = 1.3
 export function nextInStory(events: EventsData, from: number, exclude: ReadonlySet<number>): number | null {
   const start = events.start[from]
   const horizon = Math.max(4, (YEAR_MAX - start) * 0.04)
-  const lon0 = events.positions[from * 2]
-  const lat0 = events.positions[from * 2 + 1]
-  const cosLat = Math.cos((lat0 * Math.PI) / 180)
-
   let best: number | null = null
   let bestWeight = 0
   for (let j = 0; j < events.count; j++) {
     const gap = events.start[j] - start
     if (gap <= 0 || gap > horizon * 4 || j === from || exclude.has(j)) continue
-    const dLon = ((events.positions[j * 2] - lon0 + 540) % 360) - 180
-    const km = Math.hypot(dLon * cosLat * 111.3, (events.positions[j * 2 + 1] - lat0) * 110.6)
+    const km = distanceKm(events, from, j)
     if (km > MAX_KM) continue
     const weight = (events.score[j] / (1 + gap / horizon) / (1 + km / 800)) * (events.category[j] === events.category[from] ? SAME_CATEGORY_BONUS : 1)
     if (weight > bestWeight) {
@@ -34,7 +29,7 @@ export function nextInStory(events: EventsData, from: number, exclude: ReadonlyS
 
 // [Agent] How far apart two events are, for captions like "12 years later · 340 km away".
 export function distanceKm(events: EventsData, a: number, b: number) {
-  const cosLat = Math.cos((events.positions[a * 2 + 1] * Math.PI) / 180)
-  const dLon = ((events.positions[b * 2] - events.positions[a * 2] + 540) % 360) - 180
-  return Math.hypot(dLon * cosLat * 111.3, (events.positions[b * 2 + 1] - events.positions[a * 2 + 1]) * 110.6)
+  const cosLat = Math.cos((events.lat[a] * Math.PI) / 180)
+  const dLon = ((events.lon[b] - events.lon[a] + 540) % 360) - 180
+  return Math.hypot(dLon * cosLat * 111.3, (events.lat[b] - events.lat[a]) * 110.6)
 }

@@ -5,11 +5,11 @@
 import { mkdirSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { CATEGORIES } from '../src/lib/categories.ts'
+import { USER_AGENT } from './consts.ts'
 
 const args = process.argv.slice(2)
 const refresh = args.includes('--refresh')
 const only = args.filter(a => !a.startsWith('--'))
-const USER_AGENT = 'mappa-mundi/0.1 (francesco@scrapegraphai.com)'
 
 mkdirSync('data', { recursive: true })
 const db = new DatabaseSync('data/history.sqlite')

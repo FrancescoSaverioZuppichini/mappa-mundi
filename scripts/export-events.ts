@@ -1,5 +1,6 @@
-// [Agent] Responsibility: every decision about the data. SQLite facts → public/data/events.bin + events-meta.json: which events ship, where they sit and how important they are.
-// events.bin holds the numeric columns, and events-meta.json the strings only the UI needs. Rows are sorted by score, most important first, so the app ranks events by walking from the top.
+// [Agent] Responsibility: every decision about the data. SQLite facts → the dataset, two Feather (Arrow IPC) files joined on qid: which events ship, where they sit, how important they are, and what Wikipedia says about them.
+// - events.arrow: the facts, which the app loads whole. The same file goes to Hugging Face. Rows are sorted by score, most important first, so the app ranks events by walking from the top.
+// - leads.arrow: each event's Wikipedia lead, description and thumbnail, in the same row order. The app never loads it: scripts/seed-db.ts puts it in D1, and the Worker serves one row per opened event.
 //
 // Position, first match wins:
 //   1. the event's own Wikidata coordinates;
@@ -14,10 +15,10 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { CompressionType, dictionary, int8, setCompressionCodec, tableFromArrays, tableToIPC, utf8 } from '@uwdata/flechette'
 import { CATEGORIES } from '../src/lib/categories.ts'
+import { EVENTS_FILE, LEADS_FILE, MIN_INLINKS, ZSTD } from './consts.ts'
 
-// [Agent] The floor for existing at all. A tenth of articles have zero incoming links and the bottom fifth fewer than ten: orphan stubs nobody links to.
-const MIN_INLINKS = 10
 const TEMPLATE_CAP = 60
 
 type Row = {
@@ -38,6 +39,11 @@ type Row = {
   parts: number
   loc_lon: number | null
   loc_lat: number | null
+  description: string | null
+  thumbnail: string | null
+  lead_html: string | null
+  extract: string | null
+  fetched_at: string | null
 }
 
 function position(r: Row): { lon: number; lat: number; by: string } | null {
@@ -51,8 +57,8 @@ function position(r: Row): { lon: number; lat: number; by: string } | null {
 const db = new DatabaseSync('data/history.sqlite', { readOnly: true })
 const rows = db
   .prepare(`
-  SELECT e.*, coalesce(e.year_end, e.year) AS year_end, a.inlinks, a.lon AS article_lon, a.lat AS article_lat
-  FROM events e JOIN articles a USING (article) WHERE a.inlinks >= ${MIN_INLINKS}`)
+  SELECT e.*, coalesce(e.year_end, e.year) AS year_end, a.inlinks, a.lon AS article_lon, a.lat AS article_lat, a.description, a.thumbnail, l.lead_html, l.extract, l.fetched_at
+  FROM events e JOIN articles a USING (article) LEFT JOIN leads l USING (article) WHERE a.inlinks >= ${MIN_INLINKS}`)
   .all() as Row[]
 
 const placedBy: Record<string, number> = {}
@@ -65,38 +71,46 @@ const events = rows
   .sort((a, b) => b.score - a.score || b.sitelinks - a.sitelinks)
 const n = events.length
 
-// [Agent] Layout: u32 count, then f32 columns [lon,lat]×n, start×n, end×n, score×n, inlinks×n, sitelinks×n, then a u8 category column. Every f32 column starts 4-byte aligned, so the client wraps each one as a typed-array view with no copy.
-const buffer = new ArrayBuffer(4 + n * 28 + n)
-new Uint32Array(buffer, 0, 1)[0] = n
-const columns = {
-  positions: new Float32Array(buffer, 4, n * 2),
-  start: new Float32Array(buffer, 4 + n * 8, n),
-  end: new Float32Array(buffer, 4 + n * 12, n),
-  score: new Float32Array(buffer, 4 + n * 16, n),
-  inlinks: new Float32Array(buffer, 4 + n * 20, n),
-  sitelinks: new Float32Array(buffer, 4 + n * 24, n),
-  category: new Uint8Array(buffer, 4 + n * 28, n),
-}
-events.forEach((r, i) => {
-  columns.positions.set([r.lon, r.lat], i * 2)
-  columns.start[i] = r.year
-  columns.end[i] = r.year_end
-  columns.score[i] = r.score
-  columns.inlinks[i] = r.inlinks
-  columns.sitelinks[i] = r.sitelinks
-  columns.category[i] = r.category
-})
+// [Agent] One record batch, ZSTD-compressed: a reader unzips each column once, then wraps it as a typed array over those bytes, with no parsing. Float32Array inputs become float32 columns as they are. category and position_source are dictionary-encoded: the file says "battle", and each row costs one byte.
+const eventsTable = tableFromArrays(
+  {
+    qid: events.map(r => r.qid),
+    label: events.map(r => r.label),
+    article: events.map(r => r.article),
+    category: events.map(r => CATEGORIES[r.category].name),
+    start: Float32Array.from(events, r => r.year),
+    end: Float32Array.from(events, r => r.year_end),
+    lon: Float32Array.from(events, r => r.lon),
+    lat: Float32Array.from(events, r => r.lat),
+    position_source: events.map(r => r.by),
+    score: Float32Array.from(events, r => r.score),
+    inlinks: Float32Array.from(events, r => r.inlinks),
+    sitelinks: Float32Array.from(events, r => r.sitelinks),
+  },
+  { types: { qid: utf8(), label: utf8(), article: utf8(), category: dictionary(utf8(), int8()), position_source: dictionary(utf8(), int8()) } },
+)
 
-// [Agent] Most enwiki titles are just the label with underscores, so those ship as "" and the client rebuilds them. That keeps the meta file about a third smaller.
-const meta = {
-  qid: events.map(r => Number(r.qid.slice(1))),
-  label: events.map(r => r.label),
-  article: events.map(r => (r.article === r.label.replaceAll(' ', '_') ? '' : r.article)),
-}
+// [Agent] Same rows, same order, so the two files join on qid or by row. An event Wikipedia had nothing for is a row of nulls.
+const leadsTable = tableFromArrays(
+  {
+    qid: events.map(r => r.qid),
+    description: events.map(r => r.description),
+    extract: events.map(r => r.extract),
+    lead_html: events.map(r => r.lead_html),
+    thumbnail: events.map(r => r.thumbnail),
+    fetched_at: events.map(r => r.fetched_at),
+  },
+  { types: { qid: utf8(), description: utf8(), extract: utf8(), lead_html: utf8(), thumbnail: utf8(), fetched_at: utf8() } },
+)
 
+mkdirSync('data/release', { recursive: true })
 mkdirSync('public/data', { recursive: true })
-writeFileSync('public/data/events.bin', new Uint8Array(buffer))
-writeFileSync('public/data/events-meta.json', JSON.stringify(meta))
+setCompressionCodec(CompressionType.ZSTD, ZSTD)
+const eventsBytes = tableToIPC(eventsTable, { format: 'file', codec: CompressionType.ZSTD })!
+const leadsBytes = tableToIPC(leadsTable, { format: 'file', codec: CompressionType.ZSTD })!
+writeFileSync(EVENTS_FILE, eventsBytes)
+writeFileSync(LEADS_FILE, leadsBytes)
+const mb = (bytes: Uint8Array) => `${(bytes.byteLength / 1e6).toFixed(1)}MB`
 
 console.log(
   `✓ ${n} events, placed by ${Object.entries(placedBy)
@@ -110,4 +124,5 @@ console.log(
     .map(r => r.label)
     .join(' · ')}`,
 )
-console.log(`  events.bin ${(buffer.byteLength / 1e6).toFixed(1)}MB, events-meta.json ${(JSON.stringify(meta).length / 1e6).toFixed(1)}MB`)
+console.log(`  leads: ${events.filter(r => r.lead_html).length} of ${n}, thumbnails: ${events.filter(r => r.thumbnail).length}`)
+console.log(`  ${EVENTS_FILE} ${mb(eventsBytes)}, ${LEADS_FILE} ${mb(leadsBytes)}`)
