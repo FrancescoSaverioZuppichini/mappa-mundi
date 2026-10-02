@@ -16,6 +16,8 @@
     "data:leads": "node --env-file-if-exists=.env scripts/fetch-leads.ts",
     "data:fonts": "node scripts/fetch-fonts.ts",
     "data:publish": "node --env-file=.env scripts/publish-dataset.ts",
+    "data:backup": "tar czf data.tar.gz data && wrangler r2 object put mappa-mundi-data/data.tar.gz --file data.tar.gz --content-type application/gzip --remote && rm data.tar.gz",
+    "data:restore": "wrangler r2 object get mappa-mundi-data/data.tar.gz --file data.tar.gz --remote && tar xzf data.tar.gz && rm data.tar.gz",
     "db:seed": "node scripts/seed-db.ts",
     "types": "wrangler types",
     "format": "biome check --write"

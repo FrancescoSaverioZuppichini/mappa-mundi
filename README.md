@@ -119,6 +119,8 @@ The rule that keeps the pipeline simple: **the fetch scripts only record facts, 
 
 `npm run data` runs all six in order. Then `npm run data:publish` uploads the dataset to Hugging Face, and `npm run db:seed -- --remote` loads the leads into D1 (see [Dataset](#dataset) and [Deploy](#deploy)).
 
+`data/` (the SQLite cache with every fetched fact and lead, plus the raw downloads) isn't in git. Its backup is one archive in the private R2 bucket `mappa-mundi-data`: `npm run data:restore` brings it back before a pipeline run, and `npm run data:backup` replaces it after one.
+
 The two Wikipedia steps read `WIKIMEDIA_TOKEN` from `.env` if it's there: an owner-only OAuth 2 token from meta.wikimedia.org, which makes requests count against your account's rate limit instead of the anonymous one.
 
 #### Which events

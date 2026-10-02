@@ -23,8 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 
-# pipeline cache and source-of-truth DB (root only: public/data is what ships)
+# pipeline cache and source-of-truth DB (root only: public/data is what ships), and its archive while data:backup/data:restore run
 /data/
+/data.tar.gz
 
 # wrangler local state
 .wrangler/
