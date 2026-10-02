@@ -415,7 +415,7 @@ scripts/                       the offline pipeline (Node 24)
 └─ fetch-fonts.ts              every font, once → public/fonts (UI woff2 + ui.css, map-label TTFs), so no font CDN at runtime
 
 worker/
-└─ index.ts                    GET /api/leads/:qid → one row from D1, edge-cached
+└─ index.ts                    GET /api/leads/:qid → one row from D1
 
 src/
 ├─ main.tsx                    boot: fonts + the app together, or an error on the page if the data fails
