@@ -4,6 +4,8 @@
 
 **Five thousand years on one globe.** About 54,000 events from Wikipedia, from 3000 BC to today, ranked by how much the rest of Wikipedia points at them. Drag through time and the world redraws itself as the maps of each age. Zoom in and history gets denser. Press play and watch it happen.
 
+**Live:** [mappa-mundi.francesco-zuppichini-30c.workers.dev](https://mappa-mundi.francesco-zuppichini-30c.workers.dev) · **Dataset:** [Francesco/mappa-mundi](https://huggingface.co/datasets/Francesco/mappa-mundi) on Hugging Face, the 53,868 events and their Wikipedia leads as two Feather files.
+
 ```bash
 npm install
 npm run dev      # http://localhost:5173

@@ -22,7 +22,7 @@ configs:
 
 # Mappa Mundi
 
-53,868 historical events from 3000 BC to today, each placed on the globe and ranked by how much the rest of Wikipedia points at it. The top of the list is World War II, World War I, the COVID-19 pandemic and the American Civil War. It's the data behind Mappa Mundi, an atlas of history you drag through time.
+53,868 historical events from 3000 BC to today, each placed on the globe and ranked by how much the rest of Wikipedia points at it. The top of the list is World War II, World War I, the COVID-19 pandemic and the American Civil War. It's the data behind [Mappa Mundi](https://mappa-mundi.francesco-zuppichini-30c.workers.dev), an atlas of history you drag through time, and it's built by the pipeline in [its repo](https://github.com/FrancescoSaverioZuppichini/mappa-mundi) (`scripts/`).
 
 Two tables, same rows in the same order, joined on `qid`:
 
