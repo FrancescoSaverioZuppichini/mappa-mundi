@@ -1,5 +1,9 @@
 # Mappa Mundi
 
+
+https://github.com/user-attachments/assets/92265be5-b000-41c6-98ca-f3a9c5f6e318
+
+
 *A mappa mundi was the medieval map of the whole known world. This one also moves through time.*
 
 **Five thousand years on one globe.** About 54,000 events from Wikipedia, from 3000 BC to today, ranked by how much the rest of Wikipedia points at them. Drag through time and the world redraws itself as the maps of each age. Zoom in and history gets denser. Press play and watch it happen.
