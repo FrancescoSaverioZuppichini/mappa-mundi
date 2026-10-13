@@ -26,6 +26,7 @@
     "@uwdata/flechette": "^2.5.0",
     "date-fns": "^4.4.0",
     "fzstd": "^0.1.1",
+    "maplibre-contour": "0.1.1",
     "maplibre-gl": "^6.11.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

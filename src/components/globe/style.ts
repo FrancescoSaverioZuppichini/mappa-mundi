@@ -1,10 +1,10 @@
 // [Agent] Responsibility: the MapLibre style for every era, and switching eras by fading paint in place.
 
 import type { LayerSpecification, Map as MapLibreMap, StyleSpecification } from 'maplibre-gl'
-import { UNICODE_RANGES } from '../../consts'
-import { CATEGORIES } from '../../lib/categories'
-import { EPOCHS } from '../../lib/epochs'
-import type { EpochConfig, TextureName } from '../../types'
+import { UNICODE_RANGES } from '../../consts.ts'
+import { CATEGORIES } from '../../lib/categories.ts'
+import { EPOCHS } from '../../lib/epochs.ts'
+import type { EpochConfig, TextureName } from '../../types.ts'
 
 // [Agent] Every epoch's layers live in one style. Switching epochs never calls setStyle, which reloads every source and janks. Instead, applyEpoch fades opacities and swaps paint in place, and hideInactive drops the faded-out layers afterwards so they stop fetching tiles.
 export const FADE_MS = 700
@@ -36,20 +36,32 @@ const byCategory = (colorOf: (color: string) => string) => ['match', ['get', 'ca
 const LAYERS = [
   { id: 'ocean', type: 'background' },
   { id: 'land', type: 'fill', source: 'land' },
-  { id: 'relief', type: 'hillshade', source: 'dem', paint: { 'hillshade-illumination-anchor': 'map' } },
+  { id: 'height-wash', type: 'color-relief', source: 'dem' },
+  { id: 'relief', type: 'hillshade', source: 'relief-dem', paint: { 'hillshade-illumination-anchor': 'map', 'hillshade-illumination-direction': 315 } },
+  {
+    id: 'contours',
+    type: 'line',
+    source: 'contours',
+    'source-layer': 'contours',
+    minzoom: 2,
+    filter: ['>', ['get', 'elevation'], 0],
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-blur': 0.08 },
+  },
   // [Agent] The DEM carries sea-floor relief too. Redrawing the sea above the hillshade masks it, so relief only shades the land the way old maps did.
   { id: 'sea', type: 'fill', source: 'sea' },
   { id: 'satellite', type: 'raster', source: 'satellite' },
-  // [Agent] Echo lines around every coast, the old engraver's trick. The negative offset pushes them outward because the land rings are wound clockwise.
-  { id: 'ripple-1', type: 'line', source: 'land', paint: { 'line-offset': -3, 'line-width': 0.5 } },
-  { id: 'ripple-2', type: 'line', source: 'land', paint: { 'line-offset': -6, 'line-width': 0.4 } },
-  { id: 'ripple-3', type: 'line', source: 'land', paint: { 'line-offset': -10, 'line-width': 0.35 } },
+  // [Agent] Only the decorative guide is generalized and omits small islands. Clockwise outer rings send negative offsets seaward; round joins avoid spikes in coves. Hide the guide past z7 where its simplification becomes visible; the real shoreline still uses land.
+  { id: 'ripple-1', type: 'line', source: 'coast-echo', maxzoom: 7, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-offset': byZoom(-1.5, -3), 'line-width': 0.5 } },
+  { id: 'ripple-2', type: 'line', source: 'coast-echo', maxzoom: 7, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-offset': byZoom(-3, -6), 'line-width': 0.4 } },
+  { id: 'ripple-3', type: 'line', source: 'coast-echo', maxzoom: 7, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-offset': byZoom(-5, -10), 'line-width': 0.35 } },
+  { id: 'coastline', type: 'line', source: 'land', layout: { 'line-join': 'round', 'line-cap': 'round' } },
   { id: 'graticule', type: 'line', source: 'graticule', filter: ['!=', ['get', 'kind'], 'circle'], paint: { 'line-width': ['match', ['get', 'kind'], 'major', 0.7, 0.35] } },
   { id: 'graticule-circles', type: 'line', source: 'graticule', filter: ['==', ['get', 'kind'], 'circle'], paint: { 'line-width': 0.5, 'line-dasharray': [4, 3] } },
   { id: 'rhumbs', type: 'line', source: 'portolan', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-width': 0.4 } },
   { id: 'polities', type: 'fill', source: 'polities', filter: ['has', 'tone'] },
   { id: 'lakes', type: 'fill', source: 'lakes' },
-  { id: 'rivers', type: 'line', source: 'rivers', paint: { 'line-width': byZoom(0.3, 1.1) } },
+  { id: 'rivers', type: 'line', source: 'rivers', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-width': byZoom(0.3, 1.1) } },
   { id: 'border-glow', type: 'line', source: 'polities', filter: ['has', 'tone'], paint: { 'line-width': byZoom(2.5, 6), 'line-blur': 3 } },
   { id: 'borders', type: 'line', source: 'polities', filter: ['has', 'tone'] },
   {
@@ -158,21 +170,28 @@ function look(epoch: EpochConfig): Record<string, LayerLook> {
   const m = epoch.map
   const pattern = (texture: TextureName | null, part: 'land' | 'ocean') => (texture ? `${epoch.id}-${part}` : undefined)
   const sea = { 'fill-color': m.ocean, 'fill-pattern': pattern(m.oceanTexture, 'ocean') }
-  const ripple = (opacity: number): LayerLook => ({ opacity: m.ripples ? opacity : 0, paint: { 'line-color': m.ripples ?? m.ocean } })
+  const ripple = (opacity: number): LayerLook => ({ opacity: m.ripples ? opacity * 0.65 : 0, paint: { 'line-color': m.terrain?.coast ?? m.ripples ?? m.ocean } })
+  const lineScale = m.terrain?.lineScale ?? 1
+  const contourWidth = (scale: number) => ['case', ['>', ['get', 'level'], 0], 1.45 * lineScale * scale, 0.85 * lineScale * scale]
   // [Agent] The ring is the bubble's own colour pushed toward contrast with the map: darker on the paper maps, lighter on the night-time satellite globe.
   const ringColor = byCategory(c => (m.satellite ? mix(c, '#ffffff', 0.45) : mix(c, '#000000', 0.25)))
   return {
     ocean: { opacity: 1, paint: { 'background-color': m.ocean } },
     land: { opacity: 1, paint: { 'fill-color': m.land, 'fill-pattern': pattern(m.landTexture, 'land') } },
+    // [Agent] Interpolation supplies the shader's metre range; a plain step expression can validate but paint flat. These are the smooth D washes, not artificial country colours.
+    'height-wash': { opacity: m.terrain ? 0.55 : 0, paint: m.terrain ? { 'color-relief-color': ['interpolate', ['linear'], ['elevation'], ...m.terrain.heights.flat()] } : {} },
     relief: {
       opacity: m.relief?.strength ?? 0,
       paint: m.relief ? { 'hillshade-shadow-color': m.relief.shadow, 'hillshade-highlight-color': m.relief.highlight, 'hillshade-accent-color': m.relief.accent } : {},
     },
+    // [Agent] Keep the reference's CSS widths at regional zoom, easing them down on the globe rather than copying its enlarged phone strokes.
+    contours: { opacity: m.terrain ? 0.55 : 0, paint: { 'line-color': m.terrain?.ink ?? m.land, 'line-width': ['interpolate', ['linear'], ['zoom'], 1, contourWidth(0.55), 6, contourWidth(1)] } },
     sea: { opacity: 1, paint: sea },
     satellite: { opacity: m.satellite ? 1 : 0, paint: {} },
     'ripple-1': ripple(0.4),
     'ripple-2': ripple(0.22),
     'ripple-3': ripple(0.1),
+    coastline: { opacity: m.terrain ? 0.65 : 0, paint: { 'line-color': m.terrain?.coast ?? m.ocean, 'line-width': byZoom(0.35 * lineScale, 0.95 * lineScale) } },
     graticule: { opacity: m.graticule ? 0.3 : 0, paint: { 'line-color': m.graticule ?? m.ocean } },
     'graticule-circles': { opacity: m.graticule ? 0.35 : 0, paint: { 'line-color': m.graticule ?? m.ocean } },
     rhumbs: { opacity: m.rhumbs ? 0.3 : 0, paint: { 'line-color': m.rhumbs ? ['case', ['get', 'main'], m.rhumbs.main, m.rhumbs.half] : m.ocean } },
@@ -201,7 +220,7 @@ function look(epoch: EpochConfig): Record<string, LayerLook> {
   }
 }
 
-export function createStyle(epoch: EpochConfig): StyleSpecification {
+export function createStyle(epoch: EpochConfig, terrain: { dem: string; contours: string }): StyleSpecification {
   const current = look(epoch)
   return {
     version: 8,
@@ -220,6 +239,7 @@ export function createStyle(epoch: EpochConfig): StyleSpecification {
     transition: { duration: FADE_MS, delay: 0 },
     sources: {
       land: { type: 'geojson', data: '/geo/land.json', attribution: 'Natural Earth' },
+      'coast-echo': { type: 'geojson', data: '/geo/coast-echo.json' },
       sea: { type: 'geojson', data: '/geo/ocean.json' },
       lakes: { type: 'geojson', data: '/geo/lakes.json' },
       rivers: { type: 'geojson', data: '/geo/rivers.json' },
@@ -227,15 +247,17 @@ export function createStyle(epoch: EpochConfig): StyleSpecification {
       portolan: { type: 'geojson', data: '/geo/portolan.json' },
       polities: { type: 'geojson', data: EMPTY, attribution: '<a href="https://github.com/aourednik/historical-basemaps">historical-basemaps</a>' },
       events: { type: 'geojson', data: EMPTY, promoteId: 'id', attribution: 'Events: Wikidata · Wikipedia' },
-      // [Agent] Mapzen terrain tiles on AWS Open Data: public and keyless. Capped at z10 because hillshade doesn't gain anything past that at our zooms.
+      // [Agent] The plugin shares cached Mapzen tiles with the physical layers. Broad z6 shading sits under detailed z10 height colour and contours; the sea and lakes mask bathymetry above all three.
       dem: {
         type: 'raster-dem',
-        tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+        tiles: [terrain.dem],
         encoding: 'terrarium',
         tileSize: 256,
         maxzoom: 10,
         attribution: 'Terrain: Mapzen / AWS',
       },
+      'relief-dem': { type: 'raster-dem', tiles: [terrain.dem], encoding: 'terrarium', tileSize: 256, maxzoom: 6 },
+      contours: { type: 'vector', tiles: [terrain.contours], minzoom: 2, maxzoom: 10 },
       satellite: {
         type: 'raster',
         tileSize: 256,
