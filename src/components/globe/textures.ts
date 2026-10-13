@@ -15,10 +15,10 @@ export function textureImage(id: string): ImageData | null {
   const epoch = EPOCHS.find(e => e.id === epochId)
   const kind = part === 'land' ? epoch?.map.landTexture : epoch?.map.oceanTexture
   if (!epoch || !kind) return null
-  return paintTexture(kind, part === 'land' ? epoch.map.land : epoch.map.ocean, epoch.ui.ink)
+  return paintTexture(kind, part === 'land' ? epoch.map.land : epoch.map.ocean, epoch.ui.ink, part === 'land' ? 0.35 : 0.45)
 }
 
-function paintTexture(kind: TextureName, base: string, ink: string): ImageData {
+function paintTexture(kind: TextureName, base: string, ink: string, strength: number): ImageData {
   const ctx = new OffscreenCanvas(SIZE, SIZE).getContext('2d', { willReadFrequently: true })!
   ctx.fillStyle = base
   ctx.fillRect(0, 0, SIZE, SIZE)
@@ -41,7 +41,7 @@ function paintTexture(kind: TextureName, base: string, ink: string): ImageData {
       const vertical = i > 120
       const wobble = Math.random() * 3
       ctx.strokeStyle = Math.random() < 0.5 ? ink : '#ffffff'
-      ctx.globalAlpha = (vertical ? 0.03 : 0.06) + Math.random() * 0.06
+      ctx.globalAlpha = ((vertical ? 0.03 : 0.06) + Math.random() * 0.06) * strength
       ctx.lineWidth = 0.5 + Math.random() * 1.8
       seamless(() => {
         ctx.beginPath()
@@ -64,7 +64,7 @@ function paintTexture(kind: TextureName, base: string, ink: string): ImageData {
       const blotch = ctx.createRadialGradient(x, y, 0, x, y, r)
       blotch.addColorStop(0, Math.random() < 0.6 ? ink : '#ffffff')
       blotch.addColorStop(1, 'transparent')
-      ctx.globalAlpha = 0.03 + Math.random() * 0.04
+      ctx.globalAlpha = (0.03 + Math.random() * 0.04) * strength
       ctx.fillStyle = blotch
       seamless(() => ctx.fillRect(x - r, y - r, r * 2, r * 2))
     }
@@ -78,7 +78,7 @@ function paintTexture(kind: TextureName, base: string, ink: string): ImageData {
       for (let col = 0; col < SIZE / 32; col++) {
         const cx = col * 32 + (row % 2) * 16 + 8
         const cy = row * 16 + 10
-        ctx.globalAlpha = 0.16 + Math.random() * 0.1
+        ctx.globalAlpha = (0.16 + Math.random() * 0.1) * strength
         ctx.beginPath()
         ctx.arc(cx - 4, cy, 4, Math.PI * 1.1, Math.PI * 1.9)
         ctx.arc(cx + 4, cy, 4, Math.PI * 1.1, Math.PI * 1.9)
@@ -89,13 +89,13 @@ function paintTexture(kind: TextureName, base: string, ink: string): ImageData {
   if (kind === 'engraving') {
     // [Agent] Copper-plate atlases shaded the sea with fine horizontal rules. A 4px pitch divides 256, so the lines tile cleanly.
     ctx.fillStyle = ink
-    ctx.globalAlpha = 0.13
+    ctx.globalAlpha = 0.13 * strength
     for (let y = 0; y < SIZE; y += 4) ctx.fillRect(0, y, SIZE, 1)
   }
 
   // [Agent] A last layer of per-pixel grain on every texture. Flat colour reads as digital, grain reads as paper. Per-pixel noise has no structure, so it tiles seamlessly.
   const image = ctx.getImageData(0, 0, SIZE, SIZE)
-  const amount = kind === 'grain' ? 14 : 7
+  const amount = (kind === 'grain' ? 14 : 7) * strength
   for (let p = 0; p < image.data.length; p += 4) {
     const n = (Math.random() - 0.5) * amount
     image.data[p] += n

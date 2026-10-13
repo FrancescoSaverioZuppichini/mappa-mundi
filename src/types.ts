@@ -74,6 +74,7 @@ export type EpochConfig = {
     land: string
     landTexture: TextureName | null
     satellite: boolean
+    terrain: { heights: [number, string][]; ink: string; coast: string; lineScale: number } | null
     relief: { shadow: string; highlight: string; accent: string; strength: number } | null
     ripples: string | null
     graticule: string | null

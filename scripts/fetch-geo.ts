@@ -44,6 +44,8 @@ for (const name of ['land', 'ocean', 'lakes', 'rivers_lake_centerlines']) {
   console.log(`✓ ${name}`)
 }
 
+await import('./coast-echo.ts')
+
 await Promise.all(
   SNAPSHOTS.map(async year => {
     const raw = `data/raw/world_${year}.geojson`

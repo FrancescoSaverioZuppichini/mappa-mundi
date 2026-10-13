@@ -1,5 +1,6 @@
 // [Agent] Responsibility: the globe engine. Owns the MapLibre map: draws the state (bubbles, labels, borders, the era's look), re-runs placement as the camera moves, and moves the camera when `selected` changes. Not React: it reads the store and writes through update().
 
+import mlcontour from 'maplibre-contour'
 import * as maplibregl from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { events, useHistory } from '../../hooks/useHistory'
@@ -17,6 +18,16 @@ import { viewportOf } from './viewport'
 
 // [Agent] MapLibre 6 finds its worker relative to its own module URL, which stops pointing anywhere once Vite pre-bundles the package. Having Vite bundle the worker itself gives a URL that works in dev and in the production build.
 maplibregl.setWorkerUrl(workerUrl)
+
+// [Agent] One worker-backed tile cache survives epoch switches and React remounts. Hillshade, height wash and contours share the same real metre DEM, and MapLibre requests only visible tiles.
+const terrain = new mlcontour.DemSource({
+  url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+  encoding: 'terrarium',
+  maxzoom: 10,
+  worker: true,
+  cacheSize: 100,
+})
+terrain.setupMaplibre(maplibregl)
 
 // [Agent] Placement re-runs while the camera moves, at most this often. MapLibre keeps moving the placed bubbles every frame in between, so motion stays at 60fps.
 const PLACE_THROTTLE_MS = 120
@@ -41,7 +52,11 @@ export function createMap(container: HTMLElement, onHover: (hovered: HoveredEven
 
   const map = new maplibregl.Map({
     container,
-    style: createStyle(epoch),
+    style: createStyle(epoch, {
+      dem: terrain.sharedDemProtocolUrl,
+      contours: terrain.contourProtocolUrl({ thresholds: { 2: [300, 1500] }, contourLayer: 'contours', elevationKey: 'elevation', levelKey: 'level' }),
+    }),
+    canvasContextAttributes: { antialias: true },
     center: [-25, 18],
     zoom: 0.9,
     minZoom: 0.6,
